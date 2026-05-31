@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OCR Book Review</title>
+  <link rel="stylesheet" href="/static/review.css">
+</head>
+<body>
+  <header>
+    <h1 id="book-title">OCR Book Review</h1>
+    <div id="progress">Loading...</div>
+    <div class="header-actions">
+      <button id="btn-export" title="Export final PDF and text">Export</button>
+      <span id="page-jump-wrap">
+        Page <input type="number" id="jump-page" min="1" value="1" style="width:4em"> /
+        <span id="queue-total">0</span>
+      </span>
+    </div>
+  </header>
+
+  <main>
+    <section id="photo-panel">
+      <img id="page-image" alt="Original page" />
+      <div id="crop-preview"></div>
+    </section>
+
+    <section id="text-panel">
+      <div id="flag-bar">
+        <span id="flag-info">No flags</span>
+        <div id="engine-buttons"></div>
+      </div>
+      <textarea id="page-text" spellcheck="false"></textarea>
+      <div id="flag-highlights"></div>
+    </section>
+  </main>
+
+  <footer>
+    <kbd>J</kbd>/<kbd>K</kbd> prev/next flag · <kbd>Enter</kbd> accept top suggestion ·
+    <kbd>N</kbd>/<kbd>P</kbd> prev/next page · <kbd>S</kbd> save
+  </footer>
+
+  <script src="/static/review.js"></script>
+</body>
+</html>
