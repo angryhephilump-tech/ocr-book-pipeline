@@ -199,6 +199,57 @@ def build_book_outputs(output_dir: Path, pages: list[dict]) -> None:
     (output_dir / "book_review_needed.txt").write_text("\n\n".join(review_parts), encoding="utf-8")
 
 
+def run_pipeline(
+    input_path: Path,
+    output_dir: Path,
+    *,
+    title: str | None = None,
+    project_config: Path | None = None,
+    no_interactive: bool = True,
+    on_progress=None,
+) -> dict:
+    """Run the full OCR pipeline. Optional on_progress(current, total, filename)."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    class _Args:
+        pass
+
+    args = _Args()
+    args.project_config = str(project_config) if project_config else None
+    args.title = title
+    args.no_interactive = no_interactive
+
+    project_cfg = setup_project_config(output_dir, args)
+    lang_cfg = load_language_config()
+
+    inputs = collect_inputs(input_path)
+    if not inputs:
+        raise ValueError(f"No images or PDF pages found in {input_path}")
+
+    total = len(inputs)
+    pages_meta = []
+    for i, img_path in enumerate(inputs, start=1):
+        if on_progress:
+            on_progress(i, total, img_path.name)
+        else:
+            print(f"Processing page {i}/{total}: {img_path.name}")
+        meta = process_page(i, img_path, output_dir, project_cfg, lang_cfg)
+        pages_meta.append(meta)
+        if not on_progress:
+            print(f"  {meta['page_id']}: {meta['flag_count']} flag(s)")
+
+    manifest = {
+        "book_title": project_cfg.get("book_title"),
+        "project": project_cfg,
+        "total_pages": len(pages_meta),
+        "flagged_pages": sum(1 for p in pages_meta if p["needs_review"]),
+        "pages": pages_meta,
+    }
+    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    build_book_outputs(output_dir, pages_meta)
+    return manifest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="OCR book extraction pipeline (4 runs per page)")
     parser.add_argument("input", help="Input folder of photos, single image, or PDF")
@@ -210,34 +261,20 @@ def main() -> int:
 
     input_path = Path(args.input)
     output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    project_cfg = setup_project_config(output_dir, args)
-    lang_cfg = load_language_config()
-
-    inputs = collect_inputs(input_path)
-    if not inputs:
-        raise SystemExit(f"No images or PDF pages found in {input_path}")
-
-    print(f"Found {len(inputs)} page(s). Running 4 OCR passes each...")
-    pages_meta = []
-    for i, img_path in enumerate(inputs, start=1):
-        meta = process_page(i, img_path, output_dir, project_cfg, lang_cfg)
-        pages_meta.append(meta)
-        print(f"  {meta['page_id']}: {meta['flag_count']} flag(s)")
-
-    manifest = {
-        "book_title": project_cfg.get("book_title"),
-        "project": project_cfg,
-        "total_pages": len(pages_meta),
-        "flagged_pages": sum(1 for p in pages_meta if p["needs_review"]),
-        "pages": pages_meta,
-    }
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    build_book_outputs(output_dir, pages_meta)
+    try:
+        manifest = run_pipeline(
+            input_path,
+            output_dir,
+            title=args.title,
+            project_config=Path(args.project_config) if args.project_config else None,
+            no_interactive=args.no_interactive,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     flagged = manifest["flagged_pages"]
-    print(f"\nDone. {len(pages_meta)} pages processed, {flagged} need review.")
+    print(f"\nDone. {manifest['total_pages']} pages processed, {flagged} need review.")
     print(f"Launch review UI: python review_ui.py {output_dir}")
     return 0
 

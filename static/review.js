@@ -1,31 +1,48 @@
 (() => {
   let manifest = null;
   let queue = [];
-  let queueIndex = 0;
+  let allPages = [];
   let currentPage = null;
   let flagIndex = 0;
 
   const el = (id) => document.getElementById(id);
+  const toast = el("toast");
+
+  function showToast(msg) {
+    toast.textContent = msg;
+    toast.classList.add("show");
+    toast.classList.remove("hidden");
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => toast.classList.remove("show"), 2800);
+  }
 
   async function loadManifest() {
     const res = await fetch("/api/manifest");
     manifest = await res.json();
-    el("book-title").textContent = manifest.book_title || "OCR Book Review";
-    queue = manifest.flagged_queue || [];
-    el("queue-total").textContent = queue.length;
-    if (queue.length === 0) {
-      el("progress").textContent = "No flagged pages — all auto-accepted or run pipeline first.";
+    el("book-title").textContent = manifest.book_title || "Review";
+    allPages = manifest.all_pages || manifest.pages?.map((p) => p.page_id) || [];
+    queue = manifest.flagged_queue?.length ? manifest.flagged_queue : allPages;
+
+    if (!queue.length) {
+      el("progress").textContent = "No pages found — upload and transcribe from home.";
       return;
     }
+
+    el("queue-total").textContent = queue.length;
     await loadPage(queue[0]);
   }
 
   async function loadPage(pageId) {
     const res = await fetch(`/api/page/${pageId}`);
+    if (!res.ok) {
+      showToast("Could not load page");
+      return;
+    }
     currentPage = await res.json();
     flagIndex = 0;
     el("page-text").value = currentPage.text || "";
     el("page-image").src = currentPage.image_url || "";
+    el("page-image").style.display = currentPage.image_url ? "block" : "none";
     updateProgress();
     await showCurrentFlag();
   }
@@ -33,9 +50,12 @@
   function updateProgress() {
     const pos = queue.indexOf(currentPage.page_id) + 1;
     const unresolved = (currentPage.flags || []).filter((f) => !f.resolved).length;
+    const totalFlags = (currentPage.flags || []).length;
     el("progress").textContent =
-      `Page ${pos} of ${queue.length} flagged pages · ${unresolved} flag(s) remaining on this page`;
+      `Page ${pos} of ${queue.length}` +
+      (totalFlags ? ` · ${unresolved} flag${unresolved === 1 ? "" : "s"} to review` : " · clean");
     el("jump-page").value = pos;
+    el("jump-page").max = queue.length;
   }
 
   function topEngineSuggestion(flag) {
@@ -59,23 +79,24 @@
     const flags = (currentPage.flags || []).filter((f) => !f.resolved);
     const bar = el("engine-buttons");
     bar.innerHTML = "";
-    el("crop-preview").classList.remove("visible");
-    el("crop-preview").innerHTML = "";
+    const crop = el("crop-preview");
+    crop.classList.remove("visible");
+    crop.innerHTML = "";
 
     if (!flags.length) {
-      el("flag-info").textContent = "All flags resolved on this page.";
+      el("flag-info").textContent = totalFlagsLabel(currentPage.flags);
       return;
     }
 
     if (flagIndex >= flags.length) flagIndex = flags.length - 1;
     const flag = flags[flagIndex];
-    el("flag-info").textContent =
-      `Flag ${flagIndex + 1}/${flags.length}: "${flag.text}" (${flag.reason})`;
+    el("flag-info").textContent = `Flag ${flagIndex + 1}/${flags.length} · ${flag.reason}`;
 
     const top = topEngineSuggestion(flag);
     Object.entries(flag.engine_texts || {}).forEach(([run, text]) => {
       if (!text) return;
       const btn = document.createElement("button");
+      btn.type = "button";
       btn.className = "engine-btn" + (text === top ? " top" : "");
       btn.textContent = `${run}: ${text}`;
       btn.onclick = () => acceptSuggestion(flag, text);
@@ -87,11 +108,19 @@
     if (globalIdx >= 0) {
       const cropRes = await fetch(`/api/crop/${currentPage.page_id}/${globalIdx}`);
       if (cropRes.ok) {
-        const crop = await cropRes.json();
-        el("crop-preview").innerHTML = `<img src="${crop.crop_url}" alt="crop">`;
-        el("crop-preview").classList.add("visible");
+        const data = await cropRes.json();
+        crop.innerHTML = `<img src="${data.crop_url}" alt="Flagged region">`;
+        crop.classList.add("visible");
       }
     }
+  }
+
+  function totalFlagsLabel(flags) {
+    const n = (flags || []).length;
+    if (!n) return "No flags — page looks clean";
+    const open = flags.filter((f) => !f.resolved).length;
+    if (!open) return "All flags resolved";
+    return `${open} flag${open === 1 ? "" : "s"} remaining`;
   }
 
   async function acceptSuggestion(flag, text) {
@@ -104,6 +133,7 @@
     updateProgress();
     flagIndex = 0;
     await showCurrentFlag();
+    showToast("Suggestion applied");
   }
 
   async function savePage(resolvedFlag = null, resolution = "") {
@@ -138,8 +168,7 @@
     const pos = queue.indexOf(currentPage.page_id);
     if (pos < queue.length - 1) {
       await savePage();
-      queueIndex = pos + 1;
-      await loadPage(queue[queueIndex]);
+      await loadPage(queue[pos + 1]);
     }
   }
 
@@ -147,16 +176,14 @@
     const pos = queue.indexOf(currentPage.page_id);
     if (pos > 0) {
       await savePage();
-      queueIndex = pos - 1;
-      await loadPage(queue[queueIndex]);
+      await loadPage(queue[pos - 1]);
     }
   }
 
   function acceptTopSuggestion() {
     const flags = (currentPage.flags || []).filter((f) => !f.resolved);
     if (!flags.length) return;
-    const flag = flags[flagIndex];
-    acceptSuggestion(flag, topEngineSuggestion(flag));
+    acceptSuggestion(flags[flagIndex], topEngineSuggestion(flags[flagIndex]));
   }
 
   document.addEventListener("keydown", (e) => {
@@ -164,18 +191,32 @@
     const k = e.key.toLowerCase();
     if (k === "j" || e.key === "ArrowDown") { e.preventDefault(); nextFlag(); }
     if (k === "k" || e.key === "ArrowUp") { e.preventDefault(); prevFlag(); }
-    if (k === "enter") { e.preventDefault(); acceptTopSuggestion(); }
+    if (k === "enter" && !e.shiftKey) { e.preventDefault(); acceptTopSuggestion(); }
     if (k === "n") { e.preventDefault(); nextPage(); }
     if (k === "p") { e.preventDefault(); prevPage(); }
-    if (k === "s") { e.preventDefault(); savePage(); }
+    if (k === "s" && (e.ctrlKey || e.metaKey || !e.shiftKey)) {
+      if (!e.ctrlKey && !e.metaKey) { e.preventDefault(); savePage(); showToast("Saved"); }
+    }
   });
 
   el("btn-export").onclick = async () => {
     await savePage();
-    const res = await fetch("/api/export", { method: "POST" });
-    const data = await res.json();
-    alert(`Exported:\n${data.pdf}\n${data.txt}`);
+    el("btn-export").disabled = true;
+    try {
+      const res = await fetch("/api/export", { method: "POST" });
+      const data = await res.json();
+      el("export-pdf").textContent = data.pdf;
+      el("export-txt").textContent = data.txt;
+      el("export-modal").classList.remove("hidden");
+    } finally {
+      el("btn-export").disabled = false;
+    }
   };
+
+  el("btn-close-modal").onclick = () => el("export-modal").classList.add("hidden");
+  el("btn-save").onclick = async () => { await savePage(); showToast("Page saved"); };
+  el("btn-next-page").onclick = () => nextPage();
+  el("btn-prev-page").onclick = () => prevPage();
 
   el("jump-page").addEventListener("change", async (e) => {
     const idx = parseInt(e.target.value, 10) - 1;

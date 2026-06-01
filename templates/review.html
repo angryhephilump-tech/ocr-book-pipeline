@@ -3,42 +3,81 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OCR Book Review</title>
-  <link rel="stylesheet" href="/static/review.css">
+  <title>Review — Verbatim Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
 </head>
-<body>
-  <header>
-    <h1 id="book-title">OCR Book Review</h1>
-    <div id="progress">Loading...</div>
-    <div class="header-actions">
-      <button id="btn-export" title="Export final PDF and text">Export</button>
-      <span id="page-jump-wrap">
-        Page <input type="number" id="jump-page" min="1" value="1" style="width:4em"> /
-        <span id="queue-total">0</span>
-      </span>
+<body class="page-review">
+  <header class="review-header">
+    <a href="/" class="brand compact">
+      <span class="brand-mark">VS</span>
+      <span class="brand-text">Verbatim <em>Studio</em></span>
+    </a>
+    <div class="review-meta">
+      <h1 id="book-title">Review</h1>
+      <p id="progress">Loading…</p>
+    </div>
+    <div class="review-actions">
+      <div class="page-nav">
+        <button type="button" class="btn icon" id="btn-prev-page" title="Previous page (P)">‹</button>
+        <label class="page-jump">
+          <input type="number" id="jump-page" min="1" value="1">
+          <span>/ <span id="queue-total">0</span></span>
+        </label>
+        <button type="button" class="btn icon" id="btn-next-page" title="Next page (N)">›</button>
+      </div>
+      <button type="button" class="btn primary" id="btn-export">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v8M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        Export book
+      </button>
     </div>
   </header>
 
-  <main>
-    <section id="photo-panel">
-      <img id="page-image" alt="Original page" />
-      <div id="crop-preview"></div>
+  <main class="review-main">
+    <section class="panel scan-panel">
+      <div class="panel-label">Original scan</div>
+      <div class="scan-frame">
+        <img id="page-image" alt="Original page" />
+      </div>
+      <div id="crop-preview" class="crop-preview"></div>
     </section>
 
-    <section id="text-panel">
-      <div id="flag-bar">
-        <span id="flag-info">No flags</span>
-        <div id="engine-buttons"></div>
+    <section class="panel text-panel">
+      <div class="flag-rail" id="flag-rail">
+        <div class="flag-rail-head">
+          <span class="flag-badge" id="flag-info">No flags</span>
+          <span class="flag-hint">J/K navigate · Enter accept</span>
+        </div>
+        <div id="engine-buttons" class="engine-suggestions"></div>
       </div>
-      <textarea id="page-text" spellcheck="false"></textarea>
-      <div id="flag-highlights"></div>
+      <textarea id="page-text" spellcheck="true" placeholder="Transcribed text appears here…"></textarea>
     </section>
   </main>
 
-  <footer>
-    <kbd>J</kbd>/<kbd>K</kbd> prev/next flag · <kbd>Enter</kbd> accept top suggestion ·
-    <kbd>N</kbd>/<kbd>P</kbd> prev/next page · <kbd>S</kbd> save
+  <footer class="review-footer">
+    <div class="shortcuts">
+      <kbd>J</kbd><kbd>K</kbd> flags
+      <kbd>Enter</kbd> accept
+      <kbd>N</kbd><kbd>P</kbd> pages
+      <kbd>S</kbd> save
+    </div>
+    <button type="button" class="btn ghost sm" id="btn-save">Save page</button>
   </footer>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+  <div id="export-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Export complete</h2>
+      <p>Your finalized book is ready.</p>
+      <div class="export-paths">
+        <code id="export-pdf"></code>
+        <code id="export-txt"></code>
+      </div>
+      <button type="button" class="btn primary" id="btn-close-modal">Done</button>
+    </div>
+  </div>
 
   <script src="/static/review.js"></script>
 </body>

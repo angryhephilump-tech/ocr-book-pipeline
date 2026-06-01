@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Local review UI for OCR book pipeline.
+Verbatim Studio — web UI for the OCR book pipeline.
 
 Usage:
-  python review_ui.py ./output
+  python review_ui.py
   python review_ui.py ./output --port 5050
 """
 
@@ -11,20 +11,34 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import shutil
 from pathlib import Path
 
 import cv2
 from flask import Flask, jsonify, render_template, request, send_from_directory
+from werkzeug.utils import secure_filename
 
 from pipeline.export import export_pdf, export_plain_text, load_pages_for_export
+from pipeline.web_jobs import get_job_status, is_running, reset_job, start_job
 
 ROOT = Path(__file__).resolve().parent
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".pdf"}
 
 
-def create_app(output_dir: Path) -> Flask:
+def create_app(output_dir: Path, photos_dir: Path) -> Flask:
     app = Flask(__name__, template_folder=str(ROOT / "templates"), static_folder=str(ROOT / "static"))
     app.config["OUTPUT_DIR"] = output_dir
+    app.config["PHOTOS_DIR"] = photos_dir
+    app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    photos_dir.mkdir(parents=True, exist_ok=True)
+
     state_path = output_dir / "review_state.json"
+
+    def has_manifest() -> bool:
+        return (output_dir / "manifest.json").exists()
 
     def load_state() -> dict:
         if state_path.exists():
@@ -44,18 +58,122 @@ def create_app(output_dir: Path) -> Flask:
         manifest = load_manifest()
         return [p["page_id"] for p in manifest.get("pages", []) if p.get("needs_review")]
 
+    def list_uploads() -> list[dict]:
+        items = []
+        for path in sorted(photos_dir.iterdir()):
+            if path.is_file() and path.suffix.lower() in ALLOWED_EXTENSIONS:
+                items.append({"name": path.name, "size": path.stat().st_size})
+        return items
+
     @app.route("/")
     def index():
+        if has_manifest():
+            return render_template("review.html")
+        return render_template("home.html")
+
+    @app.route("/review")
+    def review():
+        if not has_manifest():
+            return render_template("home.html"), 404
         return render_template("review.html")
+
+    @app.route("/api/status")
+    def api_status():
+        uploads = list_uploads()
+        manifest = load_manifest() if has_manifest() else {}
+        return jsonify(
+            {
+                "has_manifest": has_manifest(),
+                "upload_count": len(uploads),
+                "uploads": uploads,
+                "job": get_job_status(),
+                "book_title": manifest.get("book_title"),
+                "total_pages": manifest.get("total_pages", 0),
+                "flagged_pages": manifest.get("flagged_pages", 0),
+            }
+        )
+
+    @app.route("/api/upload", methods=["POST"])
+    def api_upload():
+        if is_running():
+            return jsonify({"error": "OCR is running — please wait."}), 409
+
+        files = request.files.getlist("files")
+        if not files:
+            return jsonify({"error": "No files received."}), 400
+
+        saved = []
+        for file in files:
+            if not file.filename:
+                continue
+            ext = Path(file.filename).suffix.lower()
+            if ext not in ALLOWED_EXTENSIONS:
+                continue
+            safe = secure_filename(Path(file.filename).name)
+            if not safe:
+                safe = f"upload{ext}"
+            dest = photos_dir / safe
+            stem, suffix = dest.stem, dest.suffix
+            counter = 1
+            while dest.exists():
+                dest = photos_dir / f"{stem}_{counter}{suffix}"
+                counter += 1
+            file.save(dest)
+            saved.append(dest.name)
+
+        if not saved:
+            return jsonify({"error": "No valid images or PDFs uploaded."}), 400
+
+        return jsonify({"ok": True, "saved": saved, "upload_count": len(list_uploads())})
+
+    @app.route("/api/clear-uploads", methods=["POST"])
+    def api_clear_uploads():
+        if is_running():
+            return jsonify({"error": "OCR is running."}), 409
+        removed = 0
+        for path in photos_dir.iterdir():
+            if path.is_file() and path.suffix.lower() in ALLOWED_EXTENSIONS:
+                path.unlink()
+                removed += 1
+        return jsonify({"ok": True, "removed": removed})
+
+    @app.route("/api/run-ocr", methods=["POST"])
+    def api_run_ocr():
+        if is_running():
+            return jsonify({"error": "OCR already running."}), 409
+        if not list_uploads():
+            return jsonify({"error": "Upload at least one page first."}), 400
+
+        data = request.get_json(silent=True) or {}
+        title = (data.get("title") or "Untitled Book").strip() or "Untitled Book"
+        reset_job()
+        started = start_job(photos_dir, output_dir, title=title)
+        if not started:
+            return jsonify({"error": "Could not start OCR."}), 409
+        return jsonify({"ok": True})
+
+    @app.route("/api/reset-project", methods=["POST"])
+    def api_reset_project():
+        if is_running():
+            return jsonify({"error": "OCR is running."}), 409
+        if output_dir.exists():
+            shutil.rmtree(output_dir, ignore_errors=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        reset_job()
+        return jsonify({"ok": True})
 
     @app.route("/api/manifest")
     def api_manifest():
         manifest = load_manifest()
         flagged = flagged_page_ids()
-        return jsonify({**manifest, "flagged_queue": flagged})
+        all_pages = [p["page_id"] for p in manifest.get("pages", [])]
+        return jsonify({**manifest, "flagged_queue": flagged, "all_pages": all_pages})
 
     @app.route("/api/page/<page_id>")
     def api_page(page_id: str):
+        if not re.fullmatch(r"page_\d{3}", page_id):
+            return jsonify({"error": "Invalid page id"}), 400
+
         consensus_path = output_dir / f"{page_id}_consensus.json"
         draft_path = output_dir / f"{page_id}_draft.txt"
         reviewed_path = output_dir / f"{page_id}_reviewed.txt"
@@ -79,14 +197,16 @@ def create_app(output_dir: Path) -> Flask:
         for f in flags:
             f["resolved"] = resolved.get(f["span_id"], False)
 
-        return jsonify({
-            "page_id": page_id,
-            "text": text,
-            "flags": flags,
-            "stats": consensus.get("stats", {}),
-            "layout": consensus.get("layout", {}),
-            "image_url": f"/images/{page_id}_source.jpg" if image_path.exists() else None,
-        })
+        return jsonify(
+            {
+                "page_id": page_id,
+                "text": text,
+                "flags": flags,
+                "stats": consensus.get("stats", {}),
+                "layout": consensus.get("layout", {}),
+                "image_url": f"/images/{page_id}_source.jpg" if image_path.exists() else None,
+            }
+        )
 
     @app.route("/images/<path:filename>")
     def serve_image(filename: str):
@@ -172,18 +292,18 @@ def create_app(output_dir: Path) -> Flask:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Launch OCR review UI")
-    parser.add_argument("output", help="Output folder from ocr_book.py")
+    parser = argparse.ArgumentParser(description="Launch Verbatim Studio")
+    parser.add_argument("output", nargs="?", default=str(ROOT / "output"), help="Output folder")
+    parser.add_argument("--photos", default=str(ROOT / "photos"), help="Upload folder")
     parser.add_argument("--port", type=int, default=5050)
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
 
     output_dir = Path(args.output).resolve()
-    if not (output_dir / "manifest.json").exists():
-        raise SystemExit(f"No manifest.json in {output_dir}. Run ocr_book.py first.")
+    photos_dir = Path(args.photos).resolve()
 
-    app = create_app(output_dir)
-    print(f"Review UI: http://{args.host}:{args.port}")
+    app = create_app(output_dir, photos_dir)
+    print(f"Verbatim Studio: http://{args.host}:{args.port}")
     print("Press Ctrl+C to stop.")
     app.run(host=args.host, port=args.port, debug=False)
     return 0

@@ -1,0 +1,18 @@
+name: Sync build status to Notion
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  notion-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync status.json to Notion
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
+        run: python scripts/sync_notion_status.py
