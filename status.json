@@ -11,6 +11,6 @@
   "clean_machine_tested": false,
   "gumroad_listing_ready": false,
   "offline_ui_no_cdn": false,
-  "last_cursor_note": "Verbatim Studio web UI (home upload + review studio) committed. Notion sync workflow added. Packaging and Gumroad still pending.",
-  "last_updated": "2026-06-01T20:00:00Z"
+  "last_cursor_note": "Notion MCP connected in Cursor; live status page updated manually. GitHub Action needs NOTION_TOKEN + NOTION_PAGE_ID secrets (page: 3726ca16-ad06-81e5-ac00-ef443b2e0b69). Packaging, Gumroad, and offline bundling still pending.",
+  "last_updated": "2026-06-01T23:45:00Z"
 }

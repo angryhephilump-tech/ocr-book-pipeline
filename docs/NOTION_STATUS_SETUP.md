@@ -10,13 +10,14 @@ The repo root `status.json` is the source of truth. On every push to `main`, Git
 2. Create an integration (e.g. "Verbatim Studio Sync")
 3. Copy the **Internal Integration Secret** → this is `NOTION_TOKEN`
 
-### 2. Create a status page
+### 2. Status page (already created)
 
-1. In Notion, create a page titled **Verbatim Studio — Build Status**
-2. Share the page with your integration (⋯ → Connect to → your integration)
-3. Copy the page ID from the URL:
-   - `https://www.notion.so/Your-Workspace/Page-Title-` **`abc123def456...`**
-   - Use the 32-character ID (with or without hyphens)
+The live status page is **🟡 Verbatim Studio — Live Build Status**:
+
+- URL: https://www.notion.so/3726ca16ad0681e5ac00ef443b2e0b69
+- Page ID for `NOTION_PAGE_ID`: `3726ca16-ad06-81e5-ac00-ef443b2e0b69`
+
+Share this page with your integration (⋯ → Connect to → your integration).
 
 ### 3. Add GitHub secrets
 
