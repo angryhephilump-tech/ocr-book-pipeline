@@ -15,9 +15,9 @@
   --radius: 14px;
   --radius-sm: 8px;
   --shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
-  --font-ui: "Outfit", system-ui, sans-serif;
-  --font-display: "Cormorant Garamond", Georgia, serif;
-  --font-mono: "JetBrains Mono", "Consolas", monospace;
+  --font-ui: "Segoe UI", system-ui, sans-serif;
+  --font-display: Georgia, "Times New Roman", serif;
+  --font-mono: "Cascadia Code", "Consolas", monospace;
 }
 
 *, *::before, *::after { box-sizing: border-box; }

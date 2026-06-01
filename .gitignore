@@ -12,3 +12,8 @@ photos/**/*
 .DS_Store
 Thumbs.db
 review_state.json
+vendor/tesseract/
+vendor/poppler/
+vendor/models/
+!vendor/README.md
+!vendor/.gitkeep

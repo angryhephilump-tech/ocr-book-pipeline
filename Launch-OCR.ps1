@@ -4,10 +4,11 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 $Port = 5050
 
-$env:PATH = "C:\Program Files\Tesseract-OCR;" +
-  "C:\Users\drewc\AppData\Local\Microsoft\WinGet\Packages\oschwartz10612.Poppler_Microsoft.Winget.Source_8wekyb3d8bbwe\poppler-25.07.0\Library\bin;" +
-  $env:PATH
-$env:TESSDATA_PREFIX = "$env:APPDATA\tesseract\"
+if (-not (Test-Path $Python)) {
+  Write-Host "Missing .venv — run: python -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt" -ForegroundColor Red
+  Read-Host "Press Enter to close"
+  exit 1
+}
 
 Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
   ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }

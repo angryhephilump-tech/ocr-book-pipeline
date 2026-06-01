@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+from pipeline.paths import configure_runtime, poppler_bin_dir
+
+configure_runtime()
+
+
+def _poppler_path() -> str | None:
+    env = os.environ.get("POPPLER_PATH", "").strip()
+    if env and Path(env).is_dir():
+        return env
+    found = poppler_bin_dir()
+    return str(found) if found else None
 
 
 def pdf_to_page_images(pdf_path: Path, output_dir: Path, dpi: int = 200) -> list[Path]:
@@ -13,10 +26,15 @@ def pdf_to_page_images(pdf_path: Path, output_dir: Path, dpi: int = 200) -> list
         raise SystemExit(
             "PDF input requires pdf2image and Poppler.\n"
             "  pip install pdf2image\n"
-            "  Install Poppler for Windows and add to PATH."
+            "  Bundle Poppler in vendor/poppler/ or install Poppler and add to PATH."
         ) from exc
 
-    images = convert_from_path(str(pdf_path), dpi=dpi)
+    poppler = _poppler_path()
+    kwargs = {"dpi": dpi}
+    if poppler:
+        kwargs["poppler_path"] = poppler
+
+    images = convert_from_path(str(pdf_path), **kwargs)
     paths = []
     stem = pdf_path.stem
     for i, img in enumerate(images, start=1):

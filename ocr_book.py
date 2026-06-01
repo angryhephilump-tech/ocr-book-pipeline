@@ -34,8 +34,11 @@ from pipeline.language import (
 )
 from pipeline.layout import IMAGE_MARKER, compose_page_text
 from pipeline.ocr_engines import run_four_passes
+from pipeline.paths import configure_runtime
 from pipeline.pdf_loader import collect_inputs
 from pipeline.preprocess import light_preprocess, load_bgr
+
+configure_runtime()
 
 ROOT = Path(__file__).resolve().parent
 

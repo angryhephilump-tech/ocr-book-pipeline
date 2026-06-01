@@ -9,6 +9,10 @@ import cv2
 import pytesseract
 from PIL import Image
 
+from pipeline.paths import configure_runtime, paddle_model_dirs
+
+configure_runtime()
+
 
 @dataclass
 class WordSpan:
@@ -50,7 +54,11 @@ def _get_paddle(lang: str = "es"):
     if _paddle_instance is None:
         from paddleocr import PaddleOCR
 
-        _paddle_instance = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
+        kwargs: dict[str, Any] = {"use_angle_cls": True, "lang": lang, "show_log": False}
+        for key, path in paddle_model_dirs().items():
+            if path is not None:
+                kwargs[key] = str(path)
+        _paddle_instance = PaddleOCR(**kwargs)
     return _paddle_instance
 
 

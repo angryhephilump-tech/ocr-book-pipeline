@@ -20,7 +20,10 @@ from flask import Flask, jsonify, render_template, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 from pipeline.export import export_pdf, export_plain_text, load_pages_for_export
+from pipeline.paths import configure_runtime
 from pipeline.web_jobs import get_job_status, is_running, reset_job, start_job
+
+configure_runtime()
 
 ROOT = Path(__file__).resolve().parent
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".pdf"}

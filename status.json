@@ -4,13 +4,13 @@
   "tesseract_bundled": false,
   "poppler_bundled": false,
   "models_prebundled": false,
-  "relative_paths_fixed": false,
+  "relative_paths_fixed": true,
   "license_key_validation": false,
   "review_ui_working": true,
   "pdf_import_working": false,
   "clean_machine_tested": false,
   "gumroad_listing_ready": false,
-  "offline_ui_no_cdn": false,
-  "last_cursor_note": "Notion MCP connected in Cursor; live status page updated manually. GitHub Action needs NOTION_TOKEN + NOTION_PAGE_ID secrets (page: 3726ca16-ad06-81e5-ac00-ef443b2e0b69). Packaging, Gumroad, and offline bundling still pending.",
-  "last_updated": "2026-06-01T23:45:00Z"
+  "offline_ui_no_cdn": true,
+  "last_cursor_note": "Relative path module (pipeline/paths.py) added; vendor/ layout and Paddle model download script ready. UI no longer loads Google Fonts. Next: populate vendor/, PyInstaller, Inno Setup.",
+  "last_updated": "2026-06-02T00:00:00Z"
 }
