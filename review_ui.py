@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Archive Studios — web UI for the OCR book pipeline.
-
-Usage:
-  python review_ui.py
-  python review_ui.py ./output --port 5050
 """
 
 from __future__ import annotations
+
+from pipeline.paddle_env import configure_paddle_env
+
+configure_paddle_env()
 
 import argparse
 import json

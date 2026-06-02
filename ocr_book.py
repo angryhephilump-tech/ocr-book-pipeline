@@ -12,6 +12,10 @@ Original photos/PDFs are NEVER modified.
 
 from __future__ import annotations
 
+from pipeline.paddle_env import configure_paddle_env
+
+configure_paddle_env()
+
 import argparse
 import json
 import sys

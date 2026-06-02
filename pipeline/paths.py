@@ -44,30 +44,84 @@ def _bundle_dir(name: str) -> Path | None:
     return None
 
 
-def tesseract_exe() -> Path | None:
+def _tessdata_for_exe(exe: Path) -> Path | None:
+    """Resolve tessdata directory for a tesseract binary."""
+    for data in (exe.parent / "tessdata", exe.parent / "share" / "tessdata"):
+        if data.is_dir() and any(data.glob("*.traineddata")):
+            return data
+    appdata = Path(os.environ.get("APPDATA", "")) / "tesseract"
+    for data in (appdata / "tessdata", appdata):
+        if data.is_dir() and any(data.glob("*.traineddata")):
+            return data
+    return None
+
+
+def _tesseract_install_candidates() -> list[tuple[Path, Path]]:
+    """Return (tesseract.exe, tessdata_dir) pairs, bundled first then system."""
+    out: list[tuple[Path, Path]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(exe: Path) -> None:
+        if not exe.is_file():
+            return
+        data = _tessdata_for_exe(exe)
+        if not data:
+            return
+        key = (str(exe.resolve()), str(data.resolve()))
+        if key in seen:
+            return
+        seen.add(key)
+        out.append((exe, data))
+
     base = _bundle_dir("tesseract")
     if base:
-        for rel in ("tesseract.exe", "bin/tesseract.exe"):
-            path = base / rel
-            if path.is_file():
-                return path
-    for fallback in (
+        for exe_rel in ("tesseract.exe", "bin/tesseract.exe"):
+            add(base / exe_rel)
+    for exe in (
         Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
         Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
     ):
-        if fallback.is_file():
-            return fallback
+        add(exe)
     found = shutil.which("tesseract")
-    return Path(found) if found else None
+    if found:
+        add(Path(found))
+
+    # User-installed language packs (e.g. Spanish) often live here on Windows.
+    appdata_td = Path(os.environ.get("APPDATA", "")) / "tesseract" / "tessdata"
+    if appdata_td.is_dir() and any(appdata_td.glob("*.traineddata")):
+        for exe, _ in list(out):
+            key = (str(exe.resolve()), str(appdata_td.resolve()))
+            if key not in seen:
+                seen.add(key)
+                out.append((exe, appdata_td))
+    return out
+
+
+def _best_tesseract_install() -> tuple[Path, Path] | None:
+    """Prefer an install that includes Spanish + English language data."""
+    best: tuple[Path, Path] | None = None
+    best_score = -1
+    for exe, data in _tesseract_install_candidates():
+        score = 0
+        if (data / "spa.traineddata").is_file():
+            score += 10
+        if (data / "eng.traineddata").is_file():
+            score += 1
+        if score > best_score:
+            best_score = score
+            best = (exe, data)
+    return best
+
+
+def tesseract_exe() -> Path | None:
+    install = _best_tesseract_install()
+    return install[0] if install else None
 
 
 def tessdata_dir() -> Path | None:
-    base = _bundle_dir("tesseract")
-    if base:
-        for rel in ("tessdata", "share/tessdata", "tessdata_best"):
-            path = base / rel
-            if path.is_dir() and any(path.glob("*.traineddata")):
-                return path
+    install = _best_tesseract_install()
+    if install:
+        return install[1]
     prefix = os.environ.get("TESSDATA_PREFIX", "").strip()
     if prefix:
         path = Path(prefix)

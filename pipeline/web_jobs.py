@@ -71,7 +71,13 @@ def start_job(photos_dir: Path, output_dir: Path, *, title: str | None = None) -
                 total=manifest["total_pages"],
             )
         except Exception as exc:
-            _set_job(status="error", error=str(exc), message="OCR failed")
+            err = str(exc)
+            if "ConvertPirAttribute" in err or "onednn" in err.lower():
+                err = (
+                    "The AI OCR engine hit a Windows compatibility bug. "
+                    "Close the app, reopen it, and try again — Tesseract will take over automatically."
+                )
+            _set_job(status="error", error=err, message="OCR failed")
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()

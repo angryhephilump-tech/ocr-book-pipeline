@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -11,11 +12,17 @@ import cv2
 import pytesseract
 from PIL import Image
 
+from pipeline.paddle_env import configure_paddle_env
 from pipeline.paths import configure_runtime, paddle_model_dirs, paddlex_models_root
 
-os.environ.setdefault("FLAGS_use_mkldnn", "0")
-os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+configure_paddle_env()
 configure_runtime()
+
+logger = logging.getLogger(__name__)
+
+_paddle_instance: Any = None
+_paddle_disabled = False
+_paddle_disable_reason = ""
 
 
 @dataclass
@@ -50,7 +57,19 @@ class OcrResult:
         self.full_text = "\n".join(lines_out)
 
 
-_paddle_instance: Any = None
+def paddle_is_disabled() -> bool:
+    return _paddle_disabled
+
+
+def paddle_disable_reason() -> str:
+    return _paddle_disable_reason
+
+
+def _disable_paddle(reason: str) -> None:
+    global _paddle_disabled, _paddle_disable_reason
+    _paddle_disabled = True
+    _paddle_disable_reason = reason
+    logger.warning("PaddleOCR disabled for this session: %s", reason)
 
 
 def _paddle_lang(primary: str) -> str:
@@ -60,6 +79,8 @@ def _paddle_lang(primary: str) -> str:
 
 def _get_paddle(lang: str = "es"):
     global _paddle_instance
+    if _paddle_disabled:
+        raise RuntimeError(_paddle_disable_reason or "PaddleOCR unavailable")
     if _paddle_instance is None:
         from paddleocr import PaddleOCR
 
@@ -158,7 +179,7 @@ def _parse_paddle_v3(results, run_id: str) -> OcrResult:
     return result
 
 
-def run_paddle(bgr, run_id: str, primary_lang: str = "spa") -> OcrResult:
+def _run_paddle_core(bgr, run_id: str, primary_lang: str = "spa") -> OcrResult:
     ocr = _get_paddle(_paddle_lang(primary_lang))
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
@@ -177,6 +198,21 @@ def run_paddle(bgr, run_id: str, primary_lang: str = "spa") -> OcrResult:
             os.unlink(path)
         except OSError:
             pass
+
+
+def run_paddle(bgr, run_id: str, primary_lang: str = "spa") -> OcrResult:
+    """Run PaddleOCR; on Windows CPU bugs, fall back to Tesseract for this pass."""
+    if _paddle_disabled:
+        result = run_tesseract(bgr, run_id, primary_lang)
+        result.engine = "tesseract"
+        return result
+    try:
+        return _run_paddle_core(bgr, run_id, primary_lang)
+    except Exception as exc:
+        _disable_paddle(str(exc))
+        result = run_tesseract(bgr, run_id, primary_lang)
+        result.engine = "tesseract"
+        return result
 
 
 def run_tesseract(bgr, run_id: str, primary_lang: str = "spa") -> OcrResult:
