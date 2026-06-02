@@ -19,4 +19,6 @@ vendor/paddlex/
 !vendor/README.md
 !vendor/.gitkeep
 dist/
-build/archive_studios/
+build/**
+!build/*.spec
+!build/*.iss
