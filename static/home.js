@@ -16,6 +16,30 @@
   const CIRC = 327;
   let pollTimer = null;
 
+  const ACCEPT_EXT = new Set([
+    ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".pdf", ".jfif", ".heic", ".heif",
+  ]);
+
+  function filterUploadFiles(fileList) {
+    const accepted = [];
+    const rejected = [];
+    for (const f of fileList) {
+      const name = (f.name || "").toLowerCase();
+      const ext = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
+      if (ACCEPT_EXT.has(ext)) accepted.push(f);
+      else rejected.push(f.name || "unknown file");
+    }
+    return { accepted, rejected };
+  }
+
+  // Stop the browser from opening the file instead of letting us handle the drop.
+  ["dragenter", "dragover", "dragleave", "drop"].forEach((ev) => {
+    document.addEventListener(ev, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+  });
+
   function showToast(msg) {
     toast.textContent = msg;
     toast.classList.add("show");
@@ -51,7 +75,9 @@
     const data = await res.json();
     renderFiles(data.uploads || []);
 
-    if (data.has_manifest && data.job.status !== "running") {
+    if (data.has_manifest && data.job.status === "running") {
+      // stay on home while OCR runs; user can open review when done
+    } else if (data.has_manifest && data.job.status === "done") {
       window.location.href = "/review";
       return;
     }
@@ -100,20 +126,36 @@
     pollTimer = null;
   }
 
-  async function uploadFiles(files) {
-    if (!files.length) return;
+  async function uploadFiles(fileList) {
+    const { accepted, rejected } = filterUploadFiles(fileList);
+    if (rejected.length) {
+      showToast(`Unsupported: ${rejected.slice(0, 2).join(", ")}${rejected.length > 2 ? "…" : ""} — use JPG, PNG, or PDF`);
+    }
+    if (!accepted.length) {
+      if (!rejected.length) showToast("No files detected — drop onto the dashed box");
+      return;
+    }
+
     const fd = new FormData();
-    for (const f of files) fd.append("files", f);
+    for (const f of accepted) fd.append("files", f);
 
     btnTranscribe.disabled = true;
+    dropzone.classList.add("uploading");
     try {
       const res = await fetch("/api/upload", { method: "POST", body: fd });
-      const data = await res.json();
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error("Upload failed — is Archive Studios still running?");
+      }
       if (!res.ok) throw new Error(data.error || "Upload failed");
       showToast(`${data.saved.length} file(s) added`);
       await refreshStatus();
     } catch (err) {
       showToast(err.message);
+    } finally {
+      dropzone.classList.remove("uploading");
     }
   }
 
@@ -132,19 +174,27 @@
   ["dragenter", "dragover"].forEach((ev) => {
     dropzone.addEventListener(ev, (e) => {
       e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
       dropzone.classList.add("dragover");
     });
   });
 
-  ["dragleave", "drop"].forEach((ev) => {
-    dropzone.addEventListener(ev, (e) => {
-      e.preventDefault();
+  dropzone.addEventListener("dragleave", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dropzone.contains(e.relatedTarget)) {
       dropzone.classList.remove("dragover");
-    });
+    }
   });
 
   dropzone.addEventListener("drop", (e) => {
-    uploadFiles([...e.dataTransfer.files]);
+    e.preventDefault();
+    e.stopPropagation();
+    dropzone.classList.remove("dragover");
+    const files = e.dataTransfer?.files;
+    if (files?.length) uploadFiles([...files]);
+    else showToast("No files detected — try browse files instead");
   });
 
   btnClear.addEventListener("click", async () => {
@@ -152,6 +202,18 @@
     showToast("Uploads cleared");
     await refreshStatus();
   });
+
+  const btnNewProject = document.getElementById("btn-new-project");
+  if (btnNewProject) {
+    btnNewProject.addEventListener("click", async () => {
+      if (!confirm("Start a new project? This clears uploads and any previous transcription.")) return;
+      await fetch("/api/reset-project", { method: "POST" });
+      await fetch("/api/clear-uploads", { method: "POST" });
+      showToast("Ready for a new project");
+      progressPanel.classList.add("hidden");
+      await refreshStatus();
+    });
+  }
 
   btnTranscribe.addEventListener("click", async () => {
     progressPanel.classList.remove("hidden");

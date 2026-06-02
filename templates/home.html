@@ -40,19 +40,23 @@
         <p>Drop book pages or a PDF. We'll transcribe, you perfect.</p>
       </div>
 
+      <div class="card-actions card-actions-top">
+        <button type="button" class="btn ghost sm" id="btn-new-project" title="Clear previous project and start over">New project</button>
+      </div>
+
       <label class="field">
         <span>Book title</span>
         <input type="text" id="book-title" placeholder="e.g. Don Quixote — Vol. I" autocomplete="off">
       </label>
 
       <div id="dropzone" class="dropzone" tabindex="0">
-        <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png,.tif,.tiff,.webp,.bmp,.pdf" hidden>
+        <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png,.tif,.tiff,.webp,.bmp,.pdf,.jfif,.heic,.heif,image/*,application/pdf" hidden>
         <div class="dropzone-inner">
           <div class="drop-icon">
             <svg width="48" height="48" viewBox="0 0 48 48" fill="none"><path d="M24 32V16M24 16l-6 6M24 16l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="8" y="8" width="32" height="32" rx="8" stroke="currentColor" stroke-width="1.5" opacity=".4"/></svg>
           </div>
           <p class="drop-title">Drag pages here</p>
-          <p class="drop-hint">JPG · PNG · TIFF · PDF — or <button type="button" class="link-btn" id="browse-btn">browse files</button></p>
+          <p class="drop-hint">JPG · PNG · TIFF · PDF — drop on the dashed box, or <button type="button" class="link-btn" id="browse-btn">browse files</button></p>
         </div>
       </div>
 

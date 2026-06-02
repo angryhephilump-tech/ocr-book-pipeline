@@ -29,7 +29,7 @@ from pipeline.web_jobs import get_job_status, is_running, reset_job, start_job
 configure_runtime()
 
 ROOT = resource_root()
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".pdf"}
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".pdf", ".jfif", ".heic", ".heif"}
 
 
 def create_app(output_dir: Path, photos_dir: Path) -> Flask:
@@ -103,8 +103,7 @@ def create_app(output_dir: Path, photos_dir: Path) -> Flask:
     def index():
         if license.license_required() and not license.is_activated():
             return redirect(url_for("activate_page"))
-        if has_manifest():
-            return render_template("review.html")
+        # Always show upload home unless user explicitly goes to /review
         return render_template("home.html")
 
     @app.route("/review")
