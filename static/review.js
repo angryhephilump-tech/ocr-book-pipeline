@@ -16,6 +16,17 @@
     showToast._t = setTimeout(() => toast.classList.remove("show"), 2800);
   }
 
+  const RUN_LABELS = {
+    A: "AI pass 1 (original)",
+    B: "AI pass 2 (enhanced)",
+    C: "Classic pass 1 (original)",
+    D: "Classic pass 2 (enhanced)",
+  };
+
+  function runLabel(runId) {
+    return RUN_LABELS[runId] || runId;
+  }
+
   async function loadManifest() {
     const res = await fetch("/api/manifest");
     manifest = await res.json();
@@ -98,7 +109,7 @@
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "engine-btn" + (text === top ? " top" : "");
-      btn.textContent = `${run}: ${text}`;
+      btn.textContent = `${runLabel(run)}: ${text}`;
       btn.onclick = () => acceptSuggestion(flag, text);
       bar.appendChild(btn);
     });
