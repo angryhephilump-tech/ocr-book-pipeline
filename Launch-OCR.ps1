@@ -1,11 +1,11 @@
-# Archive Studios — launch the web app
+# Archive Studios - launch the web app
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 $Port = 5050
 
 if (-not (Test-Path $Python)) {
-  Write-Host "Missing .venv — run: python -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt" -ForegroundColor Red
+  Write-Host "Missing .venv - run: python -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt" -ForegroundColor Red
   Read-Host "Press Enter to close"
   exit 1
 }
@@ -40,7 +40,7 @@ Write-Host "  Archive Studios is running" -ForegroundColor Green
 Write-Host "  http://127.0.0.1:$Port/" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Drop your book pages in the browser." -ForegroundColor Yellow
-Write-Host "  Press Enter here when you're done to stop the server." -ForegroundColor DarkGray
+Write-Host "  Press Enter here when you are done to stop the server." -ForegroundColor DarkGray
 Write-Host ""
 Read-Host "Press Enter to stop"
 
