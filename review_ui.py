@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Verbatim Studio — web UI for the OCR book pipeline.
+Archive Studios — web UI for the OCR book pipeline.
 
 Usage:
   python review_ui.py
@@ -331,13 +331,13 @@ def _default_data_dir() -> Path:
     from pipeline.paths import app_root, is_frozen
 
     if is_frozen():
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Verbatim Studio"
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Archive Studios"
         return base
     return app_root()
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Launch Verbatim Studio")
+    parser = argparse.ArgumentParser(description="Launch Archive Studios")
     data = _default_data_dir()
     parser.add_argument("output", nargs="?", default=str(data / "output"), help="Output folder")
     parser.add_argument("--photos", default=str(data / "photos"), help="Upload folder")
@@ -349,7 +349,7 @@ def main() -> int:
     photos_dir = Path(args.photos).resolve()
 
     app = create_app(output_dir, photos_dir)
-    print(f"Verbatim Studio: http://{args.host}:{args.port}")
+    print(f"Archive Studios: http://{args.host}:{args.port}")
     print("Press Ctrl+C to stop.")
     app.run(host=args.host, port=args.port, debug=False)
     return 0

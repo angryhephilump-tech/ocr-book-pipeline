@@ -31,7 +31,7 @@ BOOL_FIELDS = [
     ("models_prebundled", "Paddle models pre-downloaded at build time"),
     ("relative_paths_fixed", "All paths use APP_DIR (no system PATH)"),
     ("license_key_validation", "Gumroad license key screen"),
-    ("review_ui_working", "Verbatim Studio review UI"),
+    ("review_ui_working", "Archive Studios review UI"),
     ("pdf_import_working", "PDF import works offline"),
     ("clean_machine_tested", "Tested on clean Windows (no Python)"),
     ("gumroad_listing_ready", "Gumroad listing live"),
@@ -101,7 +101,7 @@ def build_status_blocks(status: dict) -> list[dict]:
             "object": "block",
             "type": "heading_1",
             "heading_1": {
-                "rich_text": [{"type": "text", "text": {"content": "Verbatim Studio — Build Status"}}],
+                "rich_text": [{"type": "text", "text": {"content": "Archive Studios — Build Status"}}],
             },
         },
         {

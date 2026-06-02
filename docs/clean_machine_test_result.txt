@@ -1,16 +1,4 @@
-﻿Verbatim Studio clean-machine test
-Time: 2026-06-01T18:21:14.6954988-06:00
+﻿Archive Studios clean-machine test
+Time: (re-run after rebuild)
 
-PASS  exe_exists  C:\Users\drewc\Projects\ocr-book-pipeline\dist\Verbatim Studio\Verbatim Studio.exe
-PASS  tesseract_bundled  C:\Users\drewc\Projects\ocr-book-pipeline\dist\Verbatim Studio\tesseract
-PASS  poppler_bundled  C:\Users\drewc\Projects\ocr-book-pipeline\dist\Verbatim Studio\poppler
-PASS  paddlex_bundled  C:\Users\drewc\Projects\ocr-book-pipeline\dist\Verbatim Studio\paddlex
-PASS  server_start  http://127.0.0.1:5051/
-PASS  http_home  Status 200
-
-Overall: PASS
-
-Notes:
-- Test uses stripped PATH (no .venv) and VERBATIM_DEV=1 to skip license gate.
-- Verified home page only; full OCR upload was not exercised in this automated run.
-- Inno Setup was not available; installer_ready remains false. Portable folder is ready.
+Run scripts/clean_machine_test.ps1 after building dist/Archive Studios/

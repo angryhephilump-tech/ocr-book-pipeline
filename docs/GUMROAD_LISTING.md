@@ -1,4 +1,4 @@
-# Gumroad listing checklist — Verbatim Studio
+# Gumroad listing checklist — Archive Studios
 
 ## Before you publish
 
@@ -9,7 +9,7 @@
 
 ## Product copy (template)
 
-**Title:** Verbatim Studio — Offline Book OCR & Review
+**Title:** Archive Studios — Offline Book OCR & Review
 
 **Tagline:** Turn page photos into publisher-grade text. 100% local. Human-in-the-loop review.
 
@@ -22,7 +22,7 @@
 
 **Price:** (your choice — suggest $29–79 for pro OCR niche)
 
-**Files to upload:** `dist/VerbatimStudio-Setup.exe`
+**Files to upload:** `dist/ArchiveStudios-Setup.exe`
 
 ## Screenshots to capture
 

@@ -1,4 +1,4 @@
-# Verbatim Studio — launch the web app
+# Archive Studios — launch the web app
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
@@ -27,7 +27,7 @@ for ($i = 0; $i -lt 40; $i++) {
 }
 
 if (-not $ready) {
-  Write-Host "Could not start Verbatim Studio." -ForegroundColor Red
+  Write-Host "Could not start Archive Studios." -ForegroundColor Red
   if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
   Read-Host "Press Enter to close"
   exit 1
@@ -36,7 +36,7 @@ if (-not $ready) {
 Start-Process "http://127.0.0.1:$Port/"
 
 Write-Host ""
-Write-Host "  Verbatim Studio is running" -ForegroundColor Green
+Write-Host "  Archive Studios is running" -ForegroundColor Green
 Write-Host "  http://127.0.0.1:$Port/" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Drop your book pages in the browser." -ForegroundColor Yellow

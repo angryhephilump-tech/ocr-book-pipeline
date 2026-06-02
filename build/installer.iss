@@ -1,9 +1,9 @@
-; Inno Setup script for Verbatim Studio
-#define MyAppName "Verbatim Studio"
+; Inno Setup script for Archive Studios
+#define MyAppName "Archive Studios"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Drew Cowles"
-#define MyAppExeName "Verbatim Studio.exe"
-#define DistDir "..\dist\Verbatim Studio"
+#define MyAppExeName "Archive Studios.exe"
+#define DistDir "..\dist\Archive Studios"
 
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
@@ -13,7 +13,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=..\dist
-OutputBaseFilename=VerbatimStudio-Setup
+OutputBaseFilename=ArchiveStudios-Setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern

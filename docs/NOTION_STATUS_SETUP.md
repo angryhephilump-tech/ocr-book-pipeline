@@ -7,7 +7,7 @@ The repo root `status.json` is the source of truth. On every push to `main`, Git
 ### 1. Create a Notion integration
 
 1. Go to https://www.notion.so/my-integrations
-2. Create an integration (e.g. "Verbatim Studio Sync")
+2. Create an integration (e.g. "Archive Studios Sync")
 3. Copy the **Internal Integration Secret** → this is `NOTION_TOKEN`
 
 ### 2. Status page (already created)

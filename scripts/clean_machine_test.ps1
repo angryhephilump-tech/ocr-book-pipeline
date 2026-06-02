@@ -1,8 +1,8 @@
 # Simulate clean-machine launch: no .venv on PATH, run bundled exe only.
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$DistDir = Join-Path $Root "dist\Verbatim Studio"
-$Exe = Join-Path $DistDir "Verbatim Studio.exe"
+$DistDir = Join-Path $Root "dist\Archive Studios"
+$Exe = Join-Path $DistDir "Archive Studios.exe"
 $Port = 5051
 $LogFile = Join-Path $Root "docs\clean_machine_test_result.txt"
 
@@ -55,7 +55,7 @@ if ($proc.HasExited) {
     Add-Check "server_start" $true "http://127.0.0.1:$Port/"
     try {
         $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 15
-        $okHome = $resp.StatusCode -eq 200 -and $resp.Content -match "Verbatim"
+        $okHome = $resp.StatusCode -eq 200 -and $resp.Content -match "Archive"
         Add-Check "http_home" $okHome "Status $($resp.StatusCode)"
     } catch {
         Add-Check "http_home" $false $_.Exception.Message
@@ -65,7 +65,7 @@ if ($proc.HasExited) {
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 
 $passed = ($checks | Where-Object { -not $_.Ok }).Count -eq 0
-$lines = @("Verbatim Studio clean-machine test", "Time: $(Get-Date -Format o)", "")
+$lines = @("Archive Studios clean-machine test", "Time: $(Get-Date -Format o)", "")
 foreach ($c in $checks) {
     $status = if ($c.Ok) { "PASS" } else { "FAIL" }
     $lines += "$status  $($c.Name)  $($c.Detail)"

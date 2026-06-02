@@ -11,6 +11,6 @@
   "clean_machine_tested": true,
   "gumroad_listing_ready": false,
   "offline_ui_no_cdn": true,
-  "last_cursor_note": "Portable build at dist/Verbatim Studio/ passes clean-machine test (exe starts, bundled tools present, home page 200). Inno Setup not installed on build machine — run ISCC for VerbatimStudio-Setup.exe. Set gumroad_product_id before release.",
+  "last_cursor_note": "Rebranded to Archive Studios. Rebuild with scripts/build_installer.ps1 for updated exe name.",
   "last_updated": "2026-06-02T00:25:00Z"
 }

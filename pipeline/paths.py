@@ -7,7 +7,7 @@ import shutil
 import sys
 from pathlib import Path
 
-# Installed: Verbatim Studio/Verbatim Studio.exe with sibling tesseract/, poppler/, models/
+# Installed: Archive Studios/Archive Studios.exe with sibling tesseract/, poppler/, models/
 # Dev repo: vendor/tesseract/, vendor/poppler/, vendor/models/
 # Frozen (PyInstaller one-folder): same as installed — exe dir is APP_ROOT.
 

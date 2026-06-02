@@ -1,8 +1,8 @@
-# Build Verbatim Studio installer: vendor -> PyInstaller -> copy bundles -> Inno Setup
+# Build Archive Studios installer: vendor -> PyInstaller -> copy bundles -> Inno Setup
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
-$DistName = "Verbatim Studio"
+$DistName = "Archive Studios"
 $DistDir = Join-Path $Root "dist\$DistName"
 
 Set-Location $Root
@@ -16,7 +16,7 @@ Write-Host "=== Step 2: Install build deps ===" -ForegroundColor Cyan
 
 Write-Host "=== Step 3: PyInstaller ===" -ForegroundColor Cyan
 if (Test-Path $DistDir) { Remove-Item $DistDir -Recurse -Force }
-& $Python -m PyInstaller build\verbatim.spec --noconfirm --clean
+& $Python -m PyInstaller build\archive_studios.spec --noconfirm --clean
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "=== Step 4: Copy vendor bundles beside exe ===" -ForegroundColor Cyan
@@ -41,7 +41,7 @@ $Iscc = @(
 if ($Iscc) {
     & $Iscc (Join-Path $Root "build\installer.iss")
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    Write-Host "Installer: dist\VerbatimStudio-Setup.exe" -ForegroundColor Green
+    Write-Host "Installer: dist\ArchiveStudios-Setup.exe" -ForegroundColor Green
 } else {
     Write-Warning "Inno Setup not found. Portable build at: $DistDir"
 }

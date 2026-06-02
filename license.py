@@ -12,7 +12,7 @@ from pathlib import Path
 from pipeline.paths import app_root, is_frozen
 
 GUMROAD_VERIFY_URL = "https://api.gumroad.com/v2/licenses/verify"
-ACTIVATION_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Verbatim Studio"
+ACTIVATION_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Archive Studios"
 ACTIVATION_FILE = ACTIVATION_DIR / "activation.json"
 
 

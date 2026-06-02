@@ -15,7 +15,7 @@ vendor/
     └── cls/                   Paddle angle classifier (optional)
 ```
 
-Installed customer layout uses the same names at the app root (sibling of `Verbatim Studio.exe`), not under `vendor/`.
+Installed customer layout uses the same names at the app root (sibling of `Archive Studios.exe`), not under `vendor/`.
 
 ## Populate for dev
 
