@@ -18,6 +18,24 @@ def app_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def resource_root() -> Path:
+    """Templates/static for PyInstaller (_internal) vs dev repo root."""
+    if is_frozen():
+        exe_dir = Path(sys.executable).resolve().parent
+        internal = exe_dir / "_internal"
+        if internal.is_dir():
+            return internal
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
+        return exe_dir
+    return app_root()
+
+
 def _bundle_dir(name: str) -> Path | None:
     root = app_root()
     for candidate in (root / name, root / "vendor" / name):
@@ -79,6 +97,29 @@ def poppler_bin_dir() -> Path | None:
     return None
 
 
+def paddlex_home() -> Path | None:
+    root = app_root()
+    for candidate in (
+        root / "paddlex",
+        root / "vendor" / "paddlex",
+        root / "models" / "paddlex",
+    ):
+        official = candidate / "official_models"
+        if official.is_dir() and any(official.iterdir()):
+            return candidate
+        if candidate.is_dir() and any(candidate.iterdir()):
+            return candidate
+    return None
+
+
+def paddlex_models_root() -> Path | None:
+    home = paddlex_home()
+    if not home:
+        return None
+    official = home / "official_models"
+    return official if official.is_dir() else home
+
+
 def paddle_model_dirs() -> dict[str, Path | None]:
     root = app_root()
     for models_root in (root / "models", root / "vendor" / "models"):
@@ -101,7 +142,10 @@ def bundled_tools_status() -> dict[str, bool]:
     return {
         "tesseract_bundled": _bundle_dir("tesseract") is not None,
         "poppler_bundled": _bundle_dir("poppler") is not None,
-        "models_prebundled": models["det_model_dir"] is not None and models["rec_model_dir"] is not None,
+        "models_prebundled": (
+            paddlex_models_root() is not None
+            or (models["det_model_dir"] is not None and models["rec_model_dir"] is not None)
+        ),
     }
 
 
@@ -116,6 +160,10 @@ def configure_runtime() -> None:
     tessdata = tessdata_dir()
     if tessdata:
         os.environ["TESSDATA_PREFIX"] = str(tessdata)
+
+    pdx = paddlex_home()
+    if pdx:
+        os.environ["PADDLE_PDX_HOME"] = str(pdx)
 
     poppler = poppler_bin_dir()
     if poppler:

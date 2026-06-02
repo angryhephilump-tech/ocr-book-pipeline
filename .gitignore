@@ -15,5 +15,8 @@ review_state.json
 vendor/tesseract/
 vendor/poppler/
 vendor/models/
+vendor/paddlex/
 !vendor/README.md
 !vendor/.gitkeep
+dist/
+build/verbatim/

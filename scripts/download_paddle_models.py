@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Pre-download PaddleOCR models into vendor/models/ for offline installs."""
+"""Pre-download PaddleOCR / PaddleX models into vendor/models/paddlex for offline installs."""
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-VENDOR_MODELS = ROOT / "vendor" / "models"
+VENDOR_PADDLEX = ROOT / "vendor" / "paddlex" / "official_models"
 LANG = "es"
+
+os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+os.environ["FLAGS_use_mkldnn"] = "0"
 
 
 def _copytree(src: Path, dst: Path) -> None:
@@ -19,35 +23,51 @@ def _copytree(src: Path, dst: Path) -> None:
 
 
 def main() -> int:
-    print("Initializing PaddleOCR (downloads models on first run)…")
+    print("Initializing PaddleOCR (downloads models on first run)...")
     from paddleocr import PaddleOCR
 
-    PaddleOCR(use_angle_cls=True, lang=LANG, show_log=False)
+    try:
+        PaddleOCR(
+            lang=LANG,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+        )
+    except Exception as exc:
+        print(f"PaddleOCR init warning: {exc}", file=sys.stderr)
 
-    home = Path.home()
-    paddle_home = home / ".paddleocr"
-    if not paddle_home.is_dir():
-        print(f"No cache at {paddle_home}. Check PaddleOCR install.", file=sys.stderr)
-        return 1
+    sources = [
+        Path.home() / ".paddlex" / "official_models",
+        Path.home() / ".paddleocr",
+    ]
 
-    VENDOR_MODELS.mkdir(parents=True, exist_ok=True)
-    copied = 0
+    copied_any = False
+    VENDOR_PADDLEX.mkdir(parents=True, exist_ok=True)
 
-    for item in sorted(paddle_home.rglob("*")):
-        if not item.is_dir():
+    for src_root in sources:
+        if not src_root.is_dir():
             continue
-        name = item.name.lower()
-        if name in {"det", "rec", "cls"} and any(item.iterdir()):
-            dest = VENDOR_MODELS / name
+        for item in src_root.iterdir():
+            if not item.is_dir():
+                continue
+            dest = VENDOR_PADDLEX / item.name
+            if dest.exists():
+                continue
             _copytree(item, dest)
-            print(f"Copied {item} -> {dest}")
-            copied += 1
+            print(f"Copied {item.name} -> {dest}")
+            copied_any = True
 
-    if copied == 0:
-        print("No det/rec/cls folders found under ~/.paddleocr — inspect cache layout manually.", file=sys.stderr)
+    legacy = VENDOR_PADDLEX.parent
+    for name in ("det", "rec", "cls"):
+        src = legacy / name
+        if src.is_dir() and not (VENDOR_PADDLEX / name).exists():
+            _copytree(src, VENDOR_PADDLEX / name)
+            copied_any = True
+
+    if not copied_any:
+        print("No models found under ~/.paddlex or ~/.paddleocr", file=sys.stderr)
         return 1
 
-    print(f"Done. Models in {VENDOR_MODELS}")
+    print(f"Done. Models in {VENDOR_PADDLEX}")
     return 0
 
 

@@ -11,21 +11,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 from pathlib import Path
 
 import cv2
-from flask import Flask, jsonify, render_template, request, send_from_directory
 from werkzeug.utils import secure_filename
 
+from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
+
+import license
 from pipeline.export import export_pdf, export_plain_text, load_pages_for_export
-from pipeline.paths import configure_runtime
+from pipeline.paths import configure_runtime, resource_root
 from pipeline.web_jobs import get_job_status, is_running, reset_job, start_job
 
 configure_runtime()
 
-ROOT = Path(__file__).resolve().parent
+ROOT = resource_root()
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".pdf"}
 
 
@@ -37,6 +40,34 @@ def create_app(output_dir: Path, photos_dir: Path) -> Flask:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     photos_dir.mkdir(parents=True, exist_ok=True)
+
+    @app.before_request
+    def require_license():
+        if not license.license_required() or license.is_activated():
+            return None
+        allowed = {"/activate", "/api/activate", "/static"}
+        if request.path.startswith("/static/"):
+            return None
+        if request.path in ("/activate", "/api/activate"):
+            return None
+        if request.path.startswith("/api/activate"):
+            return None
+        return redirect(url_for("activate_page"))
+
+    @app.route("/activate")
+    def activate_page():
+        if license.is_activated():
+            return redirect(url_for("index"))
+        return render_template("activate.html")
+
+    @app.route("/api/activate", methods=["POST"])
+    def api_activate():
+        data = request.get_json(silent=True) or {}
+        key = (data.get("license_key") or "").strip()
+        ok, message = license.verify_license_key(key)
+        if ok:
+            return jsonify({"ok": True, "message": message})
+        return jsonify({"ok": False, "error": message}), 400
 
     state_path = output_dir / "review_state.json"
 
@@ -70,6 +101,8 @@ def create_app(output_dir: Path, photos_dir: Path) -> Flask:
 
     @app.route("/")
     def index():
+        if license.license_required() and not license.is_activated():
+            return redirect(url_for("activate_page"))
         if has_manifest():
             return render_template("review.html")
         return render_template("home.html")
@@ -294,10 +327,20 @@ def create_app(output_dir: Path, photos_dir: Path) -> Flask:
     return app
 
 
+def _default_data_dir() -> Path:
+    from pipeline.paths import app_root, is_frozen
+
+    if is_frozen():
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Verbatim Studio"
+        return base
+    return app_root()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Launch Verbatim Studio")
-    parser.add_argument("output", nargs="?", default=str(ROOT / "output"), help="Output folder")
-    parser.add_argument("--photos", default=str(ROOT / "photos"), help="Upload folder")
+    data = _default_data_dir()
+    parser.add_argument("output", nargs="?", default=str(data / "output"), help="Output folder")
+    parser.add_argument("--photos", default=str(data / "photos"), help="Upload folder")
     parser.add_argument("--port", type=int, default=5050)
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()

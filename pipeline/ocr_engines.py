@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -9,8 +11,10 @@ import cv2
 import pytesseract
 from PIL import Image
 
-from pipeline.paths import configure_runtime, paddle_model_dirs
+from pipeline.paths import configure_runtime, paddle_model_dirs, paddlex_models_root
 
+os.environ.setdefault("FLAGS_use_mkldnn", "0")
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 configure_runtime()
 
 
@@ -49,28 +53,51 @@ class OcrResult:
 _paddle_instance: Any = None
 
 
-def _get_paddle(lang: str = "es"):
-    global _paddle_instance
-    if _paddle_instance is None:
-        from paddleocr import PaddleOCR
-
-        kwargs: dict[str, Any] = {"use_angle_cls": True, "lang": lang, "show_log": False}
-        for key, path in paddle_model_dirs().items():
-            if path is not None:
-                kwargs[key] = str(path)
-        _paddle_instance = PaddleOCR(**kwargs)
-    return _paddle_instance
-
-
 def _paddle_lang(primary: str) -> str:
     mapping = {"spa": "es", "eng": "en", "fra": "fr"}
     return mapping.get(primary, "es")
 
 
-def run_paddle(bgr, run_id: str, primary_lang: str = "spa") -> OcrResult:
-    ocr = _get_paddle(_paddle_lang(primary_lang))
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    raw = ocr.ocr(rgb, cls=True)
+def _get_paddle(lang: str = "es"):
+    global _paddle_instance
+    if _paddle_instance is None:
+        from paddleocr import PaddleOCR
+
+        kwargs: dict[str, Any] = {
+            "lang": lang,
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+        }
+        root = paddlex_models_root()
+        if root:
+            os.environ["PADDLE_PDX_HOME"] = str(root)
+        try:
+            _paddle_instance = PaddleOCR(**kwargs)
+        except TypeError:
+            model_dirs = paddle_model_dirs()
+            legacy = {
+                "use_angle_cls": True,
+                "lang": lang,
+            }
+            for key, path in model_dirs.items():
+                if path and key in ("det_model_dir", "rec_model_dir", "cls_model_dir"):
+                    legacy[key] = str(path)
+            try:
+                legacy["show_log"] = False
+                _paddle_instance = PaddleOCR(**legacy)
+            except (TypeError, ValueError):
+                legacy.pop("show_log", None)
+                _paddle_instance = PaddleOCR(**legacy)
+    return _paddle_instance
+
+
+def _bbox_from_box(box) -> tuple[int, int, int, int]:
+    xs = [p[0] for p in box]
+    ys = [p[1] for p in box]
+    return int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))
+
+
+def _parse_paddle_v2(raw, run_id: str) -> OcrResult:
     words: list[WordSpan] = []
     if raw and raw[0]:
         for line_idx, item in enumerate(raw[0]):
@@ -79,20 +106,77 @@ def run_paddle(bgr, run_id: str, primary_lang: str = "spa") -> OcrResult:
             box, (text, conf) = item[0], item[1]
             if not text or not str(text).strip():
                 continue
-            xs = [p[0] for p in box]
-            ys = [p[1] for p in box]
-            bbox = (int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys)))
             words.append(
                 WordSpan(
                     text=str(text).strip(),
                     confidence=float(conf) * 100.0 if conf <= 1 else float(conf),
-                    bbox=bbox,
+                    bbox=_bbox_from_box(box),
                     line_id=line_idx,
                 )
             )
     result = OcrResult(run_id=run_id, engine="paddle", words=words)
     result.rebuild_text()
     return result
+
+
+def _parse_paddle_v3(results, run_id: str) -> OcrResult:
+    words: list[WordSpan] = []
+    if not results:
+        return OcrResult(run_id=run_id, engine="paddle", words=words)
+
+    page = results[0]
+    data = page if isinstance(page, dict) else getattr(page, "json", None) or {}
+    if hasattr(page, "keys"):
+        data = dict(page)
+
+    rec_texts = data.get("rec_texts") or []
+    rec_scores = data.get("rec_scores") or []
+    rec_boxes = data.get("rec_boxes") or data.get("dt_polys") or []
+
+    for line_idx, text in enumerate(rec_texts):
+        text = str(text).strip()
+        if not text:
+            continue
+        conf = float(rec_scores[line_idx]) if line_idx < len(rec_scores) else 0.0
+        if conf <= 1:
+            conf *= 100.0
+        bbox = (0, 0, 0, 0)
+        if line_idx < len(rec_boxes):
+            box = rec_boxes[line_idx]
+            if hasattr(box, "tolist"):
+                box = box.tolist()
+            if box and isinstance(box[0], (list, tuple)):
+                bbox = _bbox_from_box(box)
+            elif len(box) >= 4:
+                xs, ys = box[0::2], box[1::2]
+                bbox = (int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys)))
+
+        words.append(WordSpan(text=text, confidence=conf, bbox=bbox, line_id=line_idx))
+
+    result = OcrResult(run_id=run_id, engine="paddle", words=words)
+    result.rebuild_text()
+    return result
+
+
+def run_paddle(bgr, run_id: str, primary_lang: str = "spa") -> OcrResult:
+    ocr = _get_paddle(_paddle_lang(primary_lang))
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        cv2.imwrite(tmp.name, rgb)
+        path = tmp.name
+
+    try:
+        if hasattr(ocr, "predict"):
+            raw = ocr.predict(path)
+            return _parse_paddle_v3(raw, run_id)
+        raw = ocr.ocr(rgb, cls=True)
+        return _parse_paddle_v2(raw, run_id)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 
 def run_tesseract(bgr, run_id: str, primary_lang: str = "spa") -> OcrResult:
