@@ -10,7 +10,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import pdf_transcribe as pt  # noqa: E402
+from pdf_transcribe_detect import (  # noqa: E402
+    merge_hard_terms,
+    parse_detection_response,
+    pick_detection_sample_pages,
+    slugify_source_name,
+)
 from pdf_transcribe_lang import (  # noqa: E402
+    build_normalization_rules_text,
     job_language_config,
     pages_need_content_reconcile,
     strip_whitespace_for_compare,
@@ -131,7 +138,7 @@ def test_missing_hard_term_rejects_patch() -> None:
 def test_script_mismatch_latin() -> None:
     spanish = "El rey gobernó en Texcoco con sus consejeros."
     assert script_mismatch_detail(spanish, "latin") is None
-    korean = "이것은 한국어 텍스트입니다 " * 3
+    korean = "이것은 한국어 텍스트입니다 " * 6
     assert script_mismatch_detail(korean, "latin") is not None
 
 
@@ -151,6 +158,50 @@ def test_too_short_on_content_page() -> None:
     finally:
         if img_path.is_file():
             img_path.unlink()
+
+
+def test_parse_detection_response() -> None:
+    raw = """{"languages": "Spanish 60%, Kaqchikel Maya 40%", "script": "Latin",
+    "direction": "left-to-right", "era": "16th century colonial",
+    "seed_hard_terms": ["Hunyg", "Atitlan"], "footnotes": true, "headers": false,
+    "avg_words_per_page": 220}"""
+    profile = parse_detection_response(raw)
+    assert "spanish" in profile["languages"]
+    assert "kaqchikel" in profile["languages"]
+    assert profile["script"] == "latin"
+    assert profile["seed_hard_terms"] == ["Hunyg", "Atitlan"]
+    rules = profile["normalization_rules"]
+    assert "Kaqchikel" in rules or "kaqchikel" in rules.lower()
+    assert "Spanish" in rules or "fué" in rules
+
+
+def test_kaqchikel_normalization_threshold() -> None:
+    langs = {"kaqchikel": 0.4, "spanish": 0.6}
+    text = build_normalization_rules_text(langs)
+    assert "Kaqchikel" in text or "Maya" in text
+    assert "fué" in text or "Spanish" in text
+
+
+def test_merge_hard_terms() -> None:
+    merged = merge_hard_terms(["Hunyg", "Atitlan"], ["Atitlan", "Tz'utujil"])
+    assert merged == ["Hunyg", "Atitlan", "Tz'utujil"]
+
+
+def test_slugify_source_name() -> None:
+    assert slugify_source_name("Kaqchikel Chronicles") == "kaqchikel_chronicles"
+
+
+def test_detection_sample_spread() -> None:
+    """Samples must cover first half pairs and multiple book regions (not pure random)."""
+    pages = list(range(1, 201))
+    samples = pick_detection_sample_pages(pages)
+    assert len(samples) >= 5
+    assert min(samples) <= 40
+    assert max(samples) >= 150
+    # At least one consecutive pair from the first half
+    first_half = set(range(1, 101))
+    has_pair = any(p in first_half and (p + 1) in samples for p in samples)
+    assert has_pair, f"expected consecutive pair in first half, got {samples}"
 
 
 def test_apply_patch_preserves_rest() -> None:
@@ -182,6 +233,11 @@ def main() -> int:
         test_script_mismatch_latin,
         test_too_short_on_content_page,
         test_apply_patch_preserves_rest,
+        test_parse_detection_response,
+        test_kaqchikel_normalization_threshold,
+        test_merge_hard_terms,
+        test_slugify_source_name,
+        test_detection_sample_spread,
     ]
     for fn in tests:
         fn()

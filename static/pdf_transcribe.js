@@ -5,6 +5,12 @@ const form = document.getElementById("form");
 const startBtn = document.getElementById("start");
 const openFolderBtn = document.getElementById("open-folder");
 const progressPanel = document.getElementById("progress-panel");
+const confirmPanel = document.getElementById("confirm-panel");
+const profileLines = document.getElementById("profile-lines");
+const profileEdit = document.getElementById("profile-edit");
+const confirmYes = document.getElementById("confirm-yes");
+const confirmEditBtn = document.getElementById("confirm-edit");
+const confirmCancel = document.getElementById("confirm-cancel");
 const progressMsg = document.getElementById("progress-msg");
 const progressDetail = document.getElementById("progress-detail");
 const barFill = document.getElementById("bar-fill");
@@ -19,6 +25,27 @@ const keyInput = document.getElementById("api-key");
 
 let workDir = null;
 let pollTimer = null;
+let editMode = false;
+
+const CONFIRM_YES_DEFAULT = "Yes, proceed";
+const CONFIRM_YES_EDIT = "Save & proceed";
+const CONFIRM_EDIT_DEFAULT = "Edit overrides";
+
+function resetConfirmUi() {
+  editMode = false;
+  profileEdit.classList.add("hidden");
+  confirmYes.textContent = CONFIRM_YES_DEFAULT;
+  confirmEditBtn.textContent = CONFIRM_EDIT_DEFAULT;
+  confirmEditBtn.disabled = false;
+}
+
+function setFormLocked(locked) {
+  form.querySelectorAll("input, select, button, textarea").forEach((el) => {
+    if (el === startBtn || el === openFolderBtn) return;
+    el.disabled = locked;
+  });
+  startBtn.disabled = locked;
+}
 
 function showKeyForm(show) {
   if (show) {
@@ -49,18 +76,6 @@ function syncSourceUi(data) {
   if (langEl && data.language) langEl.value = data.language;
   const scriptEl = document.getElementById("script");
   if (scriptEl && data.script) scriptEl.value = data.script;
-  const srcEl = document.getElementById("source-id");
-  if (srcEl && Array.isArray(data.source_ids)) {
-    const current = data.source_id || "ixtlilxochitl";
-    srcEl.innerHTML = "";
-    for (const id of data.source_ids) {
-      const opt = document.createElement("option");
-      opt.value = id;
-      opt.textContent = id.replace(/_/g, " ");
-      if (id === current) opt.selected = true;
-      srcEl.appendChild(opt);
-    }
-  }
 }
 
 async function loadKeyStatus() {
@@ -74,7 +89,7 @@ async function loadKeyStatus() {
       showKeyForm(false);
       document.getElementById("key-hint").textContent = data.hint || "saved";
       if (banner) {
-        banner.textContent = `Ready — ${data.model || "claude-opus-4-8"} · 2576px grayscale · batch 50% off`;
+        banner.textContent = `Ready — ${data.model || "claude-opus-4-8"} · v3 auto-detect · batch 50% off`;
         banner.className = "api-banner ok";
       }
     } else {
@@ -171,11 +186,58 @@ function updateBar(data) {
   barFill.style.width = `${Math.min(100, pct)}%`;
 }
 
+function showConfirmPanel(lines, fromSaved) {
+  resetConfirmUi();
+  profileLines.innerHTML = "";
+  for (const line of lines) {
+    const li = document.createElement("li");
+    li.textContent = line;
+    profileLines.appendChild(li);
+  }
+  const hint = document.getElementById("confirm-hint");
+  if (hint) {
+    hint.textContent = fromSaved
+      ? "Loaded saved profile for this source. Proceed?"
+      : "Proceed with these settings?";
+  }
+  confirmPanel.classList.remove("hidden");
+  progressPanel.classList.add("hidden");
+  setFormLocked(true);
+  startBtn.disabled = true;
+}
+
+function hideConfirmPanel() {
+  confirmPanel.classList.add("hidden");
+  progressPanel.classList.remove("hidden");
+}
+
+async function fetchProfile() {
+  try {
+    const res = await fetch("/api/profile");
+    return await res.json();
+  } catch (_) {
+    return { ready: false };
+  }
+}
+
 async function pollProgress() {
   try {
     const res = await fetch("/api/progress");
     const data = await res.json();
     if (data.work_dir) workDir = data.work_dir;
+
+    if (data.awaiting_confirm || data.phase === "awaiting_confirm") {
+      const prof = await fetchProfile();
+      if (prof.ready && prof.needs_confirmation) {
+        showConfirmPanel(prof.lines || [], prof.from_saved);
+        return;
+      }
+    }
+
+    if (data.phase !== "awaiting_confirm") {
+      hideConfirmPanel();
+    }
+
     progressMsg.textContent = data.message || data.phase || "Working…";
     const detail = [];
     if (data.processing_mode) detail.push(data.processing_mode);
@@ -192,6 +254,7 @@ async function pollProgress() {
 
     if (data.phase === "done") {
       clearInterval(pollTimer);
+      setFormLocked(false);
       startBtn.disabled = false;
       openFolderBtn.disabled = false;
       donePanel.classList.remove("hidden");
@@ -200,6 +263,7 @@ async function pollProgress() {
     }
     if (data.phase === "error" || data.error) {
       clearInterval(pollTimer);
+      setFormLocked(false);
       startBtn.disabled = false;
       errEl.textContent = data.error || data.message;
       errEl.classList.remove("hidden");
@@ -209,15 +273,17 @@ async function pollProgress() {
   }
 }
 
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
+async function startPrepare() {
+  resetConfirmUi();
   errEl.classList.add("hidden");
   donePanel.classList.add("hidden");
+  confirmPanel.classList.add("hidden");
   progressPanel.classList.remove("hidden");
+  setFormLocked(true);
   startBtn.disabled = true;
   openFolderBtn.disabled = true;
   barFill.style.width = "2%";
-  progressMsg.textContent = "Starting…";
+  progressMsg.textContent = "Uploading and analyzing sample pages…";
 
   const fd = new FormData(form);
   if (!document.getElementById("remember-key").checked) fd.delete("remember_key");
@@ -232,27 +298,96 @@ form.addEventListener("submit", async (e) => {
     await loadKeyStatus();
   }
 
+  const res = await fetch("/api/prepare", { method: "POST", body: fd });
+  const data = await res.json();
+  if (!data.ok) {
+    errEl.textContent = data.error || "Could not start.";
+    errEl.classList.remove("hidden");
+    setFormLocked(false);
+    startBtn.disabled = false;
+    if ((data.error || "").includes("key")) showKeyForm(true);
+    return;
+  }
+  workDir = data.work_dir;
+  openFolderBtn.disabled = false;
+  progressMsg.textContent = `${data.message} — working…`;
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollProgress, 1200);
+  pollProgress();
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
   try {
-    const res = await fetch("/api/start", { method: "POST", body: fd });
-    const data = await res.json();
-    if (!data.ok) {
-      errEl.textContent = data.error || "Could not start.";
-      errEl.classList.remove("hidden");
-      startBtn.disabled = false;
-      if ((data.error || "").includes("key")) showKeyForm(true);
-      return;
-    }
-    workDir = data.work_dir;
-    openFolderBtn.disabled = false;
-    progressMsg.textContent = `${data.message} — working…`;
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(pollProgress, 1200);
-    pollProgress();
+    await startPrepare();
   } catch (err) {
     errEl.textContent = String(err);
     errEl.classList.remove("hidden");
     startBtn.disabled = false;
   }
+});
+
+async function sendConfirm(action, overrides) {
+  startBtn.disabled = true;
+  errEl.classList.add("hidden");
+  hideConfirmPanel();
+  progressMsg.textContent = "Starting transcription…";
+
+  const body = { action, work_dir: workDir };
+  if (overrides) body.overrides = overrides;
+
+  const res = await fetch("/api/confirm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!data.ok) {
+    errEl.textContent = data.error || "Could not confirm.";
+    errEl.classList.remove("hidden");
+    startBtn.disabled = false;
+    return;
+  }
+  if (data.cancelled) {
+    resetConfirmUi();
+    progressPanel.classList.add("hidden");
+    setFormLocked(false);
+    startBtn.disabled = false;
+    return;
+  }
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollProgress, 1200);
+  pollProgress();
+}
+
+confirmYes.addEventListener("click", () => {
+  const overrides = {};
+  if (editMode) {
+    const lang = document.getElementById("edit-language").value;
+    const script = document.getElementById("edit-script").value;
+    if (lang) overrides.language = lang;
+    if (script) overrides.script = script;
+    sendConfirm("edit", overrides);
+  } else {
+    sendConfirm("yes");
+  }
+});
+
+confirmEditBtn.addEventListener("click", () => {
+  editMode = !editMode;
+  profileEdit.classList.toggle("hidden", !editMode);
+  confirmYes.textContent = editMode ? CONFIRM_YES_EDIT : CONFIRM_YES_DEFAULT;
+  confirmEditBtn.textContent = editMode ? "Hide overrides" : CONFIRM_EDIT_DEFAULT;
+});
+
+confirmCancel.addEventListener("click", () => {
+  if (pollTimer) clearInterval(pollTimer);
+  sendConfirm("cancel");
+  resetConfirmUi();
+  confirmPanel.classList.add("hidden");
+  progressPanel.classList.add("hidden");
+  setFormLocked(false);
+  startBtn.disabled = false;
 });
 
 openFolderBtn.addEventListener("click", async () => {

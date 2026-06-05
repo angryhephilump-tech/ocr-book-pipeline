@@ -24,8 +24,17 @@ __all__ = [
 ]
 
 MIN_CONTENT_CHARS = 50
-SCRIPT_MISMATCH_THRESHOLD = 0.20
+SCRIPT_MIN_RATIO = 0.15
+LATIN_NON_THRESHOLD = 0.20
 MIN_LETTERS_FOR_SCRIPT_CHECK = 8
+
+SCRIPT_CHAR_RANGES: dict[str, tuple[int, int]] = {
+    "latin": (0x0041, 0x024F),
+    "arabic": (0x0600, 0x06FF),
+    "korean": (0xAC00, 0xD7A3),
+    "japanese": (0x3040, 0x30FF),
+    "chinese": (0x4E00, 0x9FFF),
+}
 
 
 @dataclass(frozen=True)
@@ -99,20 +108,42 @@ def char_matches_script(c: str, script: str) -> bool:
     return True
 
 
+def _in_script_range(c: str, script: str) -> bool:
+    if script in SCRIPT_CHAR_RANGES:
+        lo, hi = SCRIPT_CHAR_RANGES[script]
+        o = ord(c)
+        return lo <= o <= hi
+    return char_matches_script(c, script)
+
+
+def validate_page_output(text: str, detected_script: str) -> tuple[bool, str]:
+    """Language-neutral batch collision check (Pipeline v3)."""
+    body = (text or "").strip()
+    if len(body) < MIN_CONTENT_CHARS:
+        return False, "output too short"
+    total_alpha = sum(1 for c in body if c.isalpha())
+    if total_alpha == 0:
+        return False, "no alphabetic characters"
+    script = (detected_script or "latin").lower()
+    if script in SCRIPT_CHAR_RANGES:
+        lo, hi = SCRIPT_CHAR_RANGES[script]
+        script_chars = sum(1 for c in body if lo <= ord(c) <= hi)
+        ratio = script_chars / total_alpha
+        if script == "latin":
+            if ratio < (1.0 - LATIN_NON_THRESHOLD):
+                return False, f"wrong script — only {ratio:.0%} latin characters"
+        elif ratio < SCRIPT_MIN_RATIO:
+            return False, f"wrong script — only {ratio:.0%} {script} characters"
+    return True, "ok"
+
+
 def script_mismatch_detail(text: str, script: str) -> str | None:
-    letters = _letter_chars(text)
-    if len(letters) < MIN_LETTERS_FOR_SCRIPT_CHECK:
+    ok, detail = validate_page_output(text, script)
+    if ok:
         return None
-    matched = sum(1 for c in letters if char_matches_script(c, script))
-    ratio = matched / len(letters)
-    if script == "latin":
-        if ratio < (1.0 - SCRIPT_MISMATCH_THRESHOLD):
-            non = len(letters) - matched
-            return f"{non}/{len(letters)} letters non-latin ({100 - int(ratio * 100)}% non-latin)"
+    if detail.startswith("output too short"):
         return None
-    if ratio < SCRIPT_MISMATCH_THRESHOLD:
-        return f"{matched}/{len(letters)} letters in expected script ({int(ratio * 100)}% {script})"
-    return None
+    return detail
 
 
 def image_likely_blank(image_path: Path) -> bool:
@@ -149,11 +180,14 @@ def check_page_sanity(
         return []
 
     failures: list[tuple[str, str]] = []
-    mismatch = script_mismatch_detail(body, script)
-    if mismatch:
-        failures.append(("script_mismatch", mismatch))
-
-    if len(re.sub(r"\s+", "", body)) < MIN_CONTENT_CHARS and not image_likely_blank(image_path):
+    ok, detail = validate_page_output(body, script)
+    if not ok:
+        if detail.startswith("output too short"):
+            if not image_likely_blank(image_path):
+                failures.append(("too_short", f"{len(body)} chars on non-blank image"))
+        else:
+            failures.append(("script_mismatch", detail))
+    elif len(re.sub(r"\s+", "", body)) < MIN_CONTENT_CHARS and not image_likely_blank(image_path):
         failures.append(("too_short", f"{len(body)} chars on non-blank image"))
 
     return failures
@@ -174,6 +208,7 @@ def run_batch_content_sanity_pass(
     transcribe_fn: Callable[..., str],
     report: Callable | None = None,
     api_delay_sec: float = 0.5,
+    user_prompt: str | None = None,
 ) -> list[dict]:
     """Scan batch outputs; re-run bad pages on live API. Return batch_collisions log."""
     from pdf_transcribe import NUM_TRANSCRIPTION_RUNS
@@ -237,12 +272,13 @@ def run_batch_content_sanity_pass(
         if not image_path:
             continue
         try:
-            new_text = transcribe_fn(
-                api_key,
-                image_path,
-                page_num=fail.page_num,
-                skip_front_pages=skip_front_pages,
-            )
+            kwargs: dict = {
+                "page_num": fail.page_num,
+                "skip_front_pages": skip_front_pages,
+            }
+            if user_prompt:
+                kwargs["user_prompt"] = user_prompt
+            new_text = transcribe_fn(api_key, image_path, **kwargs)
         except Exception as exc:
             new_text = fail.bad_output
             detail = f"{fail.detail}; rerun failed: {exc}"

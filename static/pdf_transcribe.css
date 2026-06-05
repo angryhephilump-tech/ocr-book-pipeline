@@ -92,3 +92,14 @@ h1 { font-size: 1.6rem; margin: 0 0 0.35rem; font-weight: 600; }
 .done ul { margin: 0.5rem 0; padding-left: 1.2rem; }
 .path { font-size: 0.8rem; color: #9aa0a6; word-break: break-all; }
 .err { color: #f28b82; margin-top: 1rem; font-size: 0.9rem; }
+.confirm { margin-top: 1.5rem; padding: 1rem; background: #1a1f26; border-radius: 10px; border: 1px solid #3c4043; }
+.confirm h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
+.profile-lines { margin: 0 0 1rem; padding-left: 1.2rem; font-size: 0.9rem; line-height: 1.5; }
+.profile-lines li { margin: 0.25rem 0; word-break: break-word; }
+.profile-edit { margin-bottom: 0.75rem; }
+.optional-label { margin: 0.5rem 0 0.25rem; font-size: 0.82rem; color: #9aa0a6; }
+.field.inline { display: inline-block; margin-right: 0.75rem; vertical-align: top; }
+.field.inline select {
+  padding: 0.45rem 0.55rem; border: 1px solid #3c4043; border-radius: 8px;
+  background: #1a1f26; color: #e8eaed; font-size: 0.9rem;
+}

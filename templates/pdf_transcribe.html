@@ -22,7 +22,7 @@
 
       <h1>PDF Transcribe</h1>
 
-      <p class="sub">Pipeline v2 · Opus OCR · 2 passes · reconcile content diffs · sentence-level name patches.</p>
+      <p class="sub">Pipeline v3 · auto-detect language &amp; script · 2 passes · reconcile · sentence-level patches.</p>
 
       <p class="api-banner" id="api-banner">Checking setup…</p>
 
@@ -100,11 +100,20 @@
 
       <fieldset class="mode source-config">
         <legend>Source</legend>
+        <label class="field">
+          <span>Source name</span>
+          <input type="text" name="source_name" id="source-name" placeholder="e.g. kaqchikel_chronicles" required>
+          <small>Used for auto-detected profile and <code>config/sources/&lt;name&gt;.json</code>. Re-runs skip detection if saved.</small>
+        </label>
+        <p class="hint optional-label">Optional overrides (pre-filled after auto-detection):</p>
         <label class="field inline">
           <span>Language</span>
           <select name="language" id="language">
-            <option value="spanish" selected>Spanish</option>
+            <option value="">Auto-detect</option>
+            <option value="spanish">Spanish</option>
             <option value="nahuatl">Nahuatl</option>
+            <option value="kaqchikel">Kaqchikel</option>
+            <option value="yucatec_maya">Yucatec Maya</option>
             <option value="korean">Korean</option>
             <option value="japanese">Japanese</option>
             <option value="arabic">Arabic (RTL)</option>
@@ -113,20 +122,14 @@
         <label class="field inline">
           <span>Script</span>
           <select name="script" id="script">
-            <option value="latin" selected>Latin</option>
+            <option value="">Auto-detect</option>
+            <option value="latin">Latin</option>
             <option value="arabic">Arabic</option>
             <option value="korean">Korean</option>
             <option value="japanese">Japanese</option>
             <option value="chinese">Chinese</option>
           </select>
         </label>
-        <label class="field inline">
-          <span>Hard terms file</span>
-          <select name="source_id" id="source-id">
-            <option value="ixtlilxochitl" selected>Ixtlilxóchitl (Texcoco)</option>
-          </select>
-        </label>
-        <p class="hint">Uses <code>config/hard_terms_&lt;source&gt;.txt</code> and <code>impossible_strings_&lt;source&gt;.txt</code></p>
         <label class="field">
           <span>Pilot pages (optional)</span>
           <input type="text" name="pilot_pages" id="pilot-pages" placeholder="e.g. 45,60,120-125 — overrides test count">
@@ -138,7 +141,7 @@
 
       <div class="actions">
 
-        <button type="submit" class="btn primary" id="start">Start transcription</button>
+        <button type="submit" class="btn primary" id="start">Run — auto-detect &amp; transcribe</button>
 
         <button type="button" class="btn ghost" id="open-folder" disabled>Open results folder</button>
 
@@ -147,6 +150,43 @@
     </form>
 
 
+
+    <section class="confirm hidden" id="confirm-panel" aria-live="polite">
+      <h2>Detected source profile</h2>
+      <ul class="profile-lines" id="profile-lines"></ul>
+      <div class="profile-edit hidden" id="profile-edit">
+        <label class="field inline">
+          <span>Override language</span>
+          <select id="edit-language">
+            <option value="">Keep detected</option>
+            <option value="spanish">Spanish</option>
+            <option value="nahuatl">Nahuatl</option>
+            <option value="kaqchikel">Kaqchikel</option>
+            <option value="yucatec_maya">Yucatec Maya</option>
+            <option value="korean">Korean</option>
+            <option value="japanese">Japanese</option>
+            <option value="arabic">Arabic</option>
+          </select>
+        </label>
+        <label class="field inline">
+          <span>Override script</span>
+          <select id="edit-script">
+            <option value="">Keep detected</option>
+            <option value="latin">Latin</option>
+            <option value="arabic">Arabic</option>
+            <option value="korean">Korean</option>
+            <option value="japanese">Japanese</option>
+            <option value="chinese">Chinese</option>
+          </select>
+        </label>
+      </div>
+      <p class="hint" id="confirm-hint">Proceed with these settings?</p>
+      <div class="actions">
+        <button type="button" class="btn primary" id="confirm-yes">Yes, proceed</button>
+        <button type="button" class="btn ghost" id="confirm-edit">Edit overrides</button>
+        <button type="button" class="btn ghost" id="confirm-cancel">Cancel</button>
+      </div>
+    </section>
 
     <section class="progress hidden" id="progress-panel" aria-live="polite">
 

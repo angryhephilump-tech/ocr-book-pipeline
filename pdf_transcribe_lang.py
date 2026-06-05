@@ -11,7 +11,9 @@ ROOT_DIR = Path(__file__).resolve().parent
 CONFIG_DIR = ROOT_DIR / "config"
 LANGUAGES_FILE = CONFIG_DIR / "transcribe_languages.json"
 
-VALID_LANGUAGES = frozenset({"spanish", "nahuatl", "korean", "arabic", "japanese"})
+VALID_LANGUAGES = frozenset(
+    {"spanish", "nahuatl", "korean", "arabic", "japanese", "kaqchikel", "yucatec_maya", "classical_maya"}
+)
 VALID_SCRIPTS = frozenset({"latin", "arabic", "korean", "japanese", "chinese"})
 DEFAULT_LANGUAGE = "spanish"
 DEFAULT_SOURCE_ID = "ixtlilxochitl"
@@ -30,7 +32,63 @@ LEGACY_HARD_TERMS_FILE = CONFIG_DIR / "hard_terms.txt"
 
 _SUPERSCRIPT_CHARS = "¹²³⁴⁵⁶⁷⁸⁹⁰"
 _JA_TERMINATORS = "。、！？"
-_CJK_NO_SPACE = frozenset({"japanese", "korean"})
+_CJK_NO_SPACE = frozenset({"japanese", "korean", "chinese"})
+
+NORMALIZATION_RULES: dict[str, str] = {
+    "spanish": (
+        "Do not normalize old Spanish spelling — fué, á, hácia, substituído are correct as printed. "
+        "Never modernize these forms."
+    ),
+    "nahuatl": (
+        "Do not normalize long vowel markers. Āā, Ēē, Īī, Ōō with macrons are semantically meaningful. "
+        "Do not substitute unmarked vowels for marked ones."
+    ),
+    "yucatec_maya": (
+        "Do not normalize classical Maya orthography. Glottal stops marked with apostrophes or special "
+        "characters are phonemically meaningful — preserve exactly. Do not substitute modern unified Maya "
+        "orthography for colonial-era spelling conventions."
+    ),
+    "classical_maya": (
+        "Same as yucatec_maya. Colonial-era Maya texts use inconsistent Spanish-influenced spelling — "
+        "transcribe exactly as printed, never standardize."
+    ),
+    "kaqchikel": (
+        "Do not normalize colonial Kaqchikel Maya orthography. This text uses 16th century Spanish-influenced "
+        "spelling conventions for Maya sounds. Glottal stops, ejective consonants (tz', k', q'), and long vowels "
+        "may be marked inconsistently across the manuscript — transcribe exactly what is printed, never "
+        "standardize to modern unified Maya orthography. The letters q, tz, ch, x, and combinations like qu "
+        "represent specific Maya phonemes — do not substitute or modernize. Do not normalize variant spellings "
+        "of the same name across pages — each spelling is source-accurate."
+    ),
+    "korean": (
+        "Do not normalize hanja to hangul. Do not modernize historical hangul orthography."
+    ),
+    "japanese": (
+        "Do not normalize historical kana. ゐ and ゑ are valid historical characters."
+    ),
+    "arabic": (
+        "Do not normalize classical Arabic. Preserve tashkeel exactly as printed."
+    ),
+}
+
+_LANGUAGE_ALIASES: dict[str, str] = {
+    "spanish": "spanish",
+    "colonial spanish": "spanish",
+    "castilian": "spanish",
+    "nahuatl": "nahuatl",
+    "classical nahuatl": "nahuatl",
+    "mexica nahuatl": "nahuatl",
+    "kaqchikel": "kaqchikel",
+    "kaqchikel maya": "kaqchikel",
+    "yucatec": "yucatec_maya",
+    "yucatec maya": "yucatec_maya",
+    "maya": "classical_maya",
+    "classical maya": "classical_maya",
+    "korean": "korean",
+    "japanese": "japanese",
+    "arabic": "arabic",
+    "chinese": "chinese",
+}
 
 
 @dataclass(frozen=True)
@@ -58,9 +116,58 @@ def _load_language_catalog() -> dict:
     return {}
 
 
+def normalize_language_key(label: str) -> str | None:
+    key = (label or "").strip().lower()
+    if key in NORMALIZATION_RULES:
+        return key
+    if key in _LANGUAGE_ALIASES:
+        return _LANGUAGE_ALIASES[key]
+    for alias, canonical in _LANGUAGE_ALIASES.items():
+        if alias in key or key in alias:
+            return canonical
+    return None
+
+
+def parse_language_percentages(raw: str) -> dict[str, float]:
+    """Parse 'Spanish 60%, Classical Nahuatl 40%' into normalized fractions."""
+    out: dict[str, float] = {}
+    if not raw:
+        return out
+    for part in re.split(r"[,;]+", raw):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.match(r"(.+?)\s*(\d+(?:\.\d+)?)\s*%", part)
+        if m:
+            label, pct = m.group(1).strip(), float(m.group(2))
+            key = normalize_language_key(label)
+            if key:
+                out[key] = out.get(key, 0.0) + pct / 100.0
+            continue
+        key = normalize_language_key(part)
+        if key:
+            out[key] = out.get(key, 0.0) + 1.0
+    total = sum(out.values())
+    if total > 1.5:
+        out = {k: v / total for k, v in out.items()}
+    return out
+
+
+def build_normalization_rules_text(lang_pcts: dict[str, float], threshold: float = 0.10) -> str:
+    rules: list[str] = []
+    for lang, pct in sorted(lang_pcts.items(), key=lambda x: -x[1]):
+        if pct < threshold:
+            continue
+        rule = NORMALIZATION_RULES.get(lang)
+        if rule and rule not in rules:
+            rules.append(rule)
+    return "\n".join(rules) if rules else NORMALIZATION_RULES["spanish"]
+
+
 def normalize_language(value: str | None) -> str:
     lang = (value or DEFAULT_LANGUAGE).strip().lower()
-    return lang if lang in VALID_LANGUAGES else DEFAULT_LANGUAGE
+    key = normalize_language_key(lang) or lang
+    return key if key in VALID_LANGUAGES or key in NORMALIZATION_RULES else DEFAULT_LANGUAGE
 
 
 def normalize_source_id(value: str | None) -> str:
@@ -82,24 +189,38 @@ def job_language_config(
     language: str | None = None,
     source_id: str | None = None,
     script: str | None = None,
+    *,
+    direction: str | None = None,
+    normalization_rules: str | None = None,
 ) -> JobLanguageConfig:
     lang = normalize_language(language)
     sid = normalize_source_id(source_id)
     catalog = _load_language_catalog()
-    meta = catalog.get(lang, {})
+    meta = catalog.get(lang, {}) if lang in catalog else {}
+    norm = normalization_rules or build_normalization_rules_text({lang: 1.0})
+    hyphen = lang in ("spanish", "nahuatl", "kaqchikel", "yucatec_maya", "classical_maya")
     return JobLanguageConfig(
         language=lang,
         source_id=sid,
         script=normalize_script(script or meta.get("script"), lang),
-        direction=str(meta.get("direction", "ltr")),
-        hyphenation_join=bool(meta.get("hyphenation_join", lang in ("spanish", "nahuatl"))),
+        direction=str(direction or meta.get("direction", "ltr")),
+        hyphenation_join=bool(meta.get("hyphenation_join", hyphen)),
         emphasis=str(meta.get("emphasis", "asterisk")),
-        normalization_rule=str(
-            meta.get(
-                "normalization_rule",
-                "Transcribe exactly what is printed; do not normalize or modernize.",
-            )
-        ),
+        normalization_rule=norm,
+    )
+
+
+def job_language_config_from_state(state: dict) -> JobLanguageConfig:
+    profile = state.get("detected_source_profile") or {}
+    langs = profile.get("languages") or {}
+    primary = max(langs, key=langs.get) if langs else state.get("language", DEFAULT_LANGUAGE)
+    return job_language_config(
+        primary,
+        state.get("source_id") or state.get("source_name"),
+        state.get("script"),
+        direction=state.get("direction") or profile.get("direction"),
+        normalization_rules=state.get("normalization_rules")
+        or profile.get("normalization_rules"),
     )
 
 
@@ -122,8 +243,20 @@ def impossible_strings_path(source_id: str) -> Path:
     return CONFIG_DIR / f"impossible_strings_{source_id}.txt"
 
 
-def load_hard_terms(source_id: str | None = None) -> list[str]:
+def load_hard_terms(source_id: str | None = None, state: dict | None = None) -> list[str]:
+    if state:
+        if state.get("hard_terms"):
+            return list(state["hard_terms"])
+        auto = state.get("hard_terms_file")
+        if auto and Path(auto).is_file():
+            terms = _read_term_lines(Path(auto))
+            if terms:
+                return terms
     sid = normalize_source_id(source_id)
+    auto_path = CONFIG_DIR / f"hard_terms_auto_{sid}.txt"
+    terms = _read_term_lines(auto_path)
+    if terms:
+        return terms
     path = hard_terms_path(sid)
     terms = _read_term_lines(path)
     if terms:
@@ -131,8 +264,18 @@ def load_hard_terms(source_id: str | None = None) -> list[str]:
     return _read_term_lines(LEGACY_HARD_TERMS_FILE)
 
 
-def load_impossible_strings(source_id: str | None = None) -> list[str]:
+def load_impossible_strings(source_id: str | None = None, state: dict | None = None) -> list[str]:
+    if state:
+        if state.get("impossible_strings"):
+            return list(state["impossible_strings"])
+        auto = state.get("impossible_strings_file")
+        if auto and Path(auto).is_file():
+            return _read_term_lines(Path(auto))
     sid = normalize_source_id(source_id)
+    auto_path = CONFIG_DIR / f"impossible_auto_{sid}.txt"
+    terms = _read_term_lines(auto_path)
+    if terms:
+        return terms
     return _read_term_lines(impossible_strings_path(sid))
 
 
@@ -184,8 +327,10 @@ def auto_hard_term_candidates(text: str, lang_cfg: JobLanguageConfig) -> list[st
     return sorted(set(out))
 
 
-def effective_hard_terms(text: str, lang_cfg: JobLanguageConfig) -> list[str]:
-    base = load_hard_terms(lang_cfg.source_id)
+def effective_hard_terms(
+    text: str, lang_cfg: JobLanguageConfig, state: dict | None = None
+) -> list[str]:
+    base = load_hard_terms(lang_cfg.source_id, state)
     auto = auto_hard_term_candidates(text, lang_cfg)
     seen: set[str] = set()
     merged: list[str] = []

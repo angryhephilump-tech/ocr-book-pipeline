@@ -138,11 +138,21 @@ def load_impossible_strings(source_id: str | None = None) -> list[str]:
 
 
 def job_config_from_state(state: dict):
-    from pdf_transcribe_lang import job_language_config
+    from pdf_transcribe_lang import job_language_config_from_state
 
-    return job_language_config(
-        state.get("language"), state.get("source_id"), state.get("script")
-    )
+    return job_language_config_from_state(state)
+
+
+def transcription_user_prompt(work_dir: Path | None = None, state: dict | None = None) -> str:
+    base = load_transcription_prompt()
+    st = state or (load_state(work_dir) if work_dir else {})
+    rules = (st or {}).get("normalization_rules") or ""
+    profile = (st or {}).get("detected_source_profile") or {}
+    if not rules:
+        rules = profile.get("normalization_rules") or ""
+    if rules:
+        return f"{base}\n\nLanguage-specific archival rules (auto-detected):\n{rules}"
+    return base
 
 
 def skip_line(reason: str) -> str:
@@ -790,10 +800,11 @@ def call_claude(
     *,
     model: str | None = None,
     max_retries: int = 4,
+    user_text: str | None = None,
 ) -> str:
     model = (model or load_settings()["model"]).strip()
     headers = anthropic_headers(api_key)
-    payload = build_vision_message_params(image_path, model)
+    payload = build_vision_message_params(image_path, model, user_text=user_text)
     last_err: Exception | None = None
     for attempt in range(max_retries):
         try:
@@ -853,11 +864,18 @@ class PageWorkItem:
     image_path: Path
 
 
-def create_message_batch(api_key: str, items: list[PageWorkItem], model: str) -> str:
+def create_message_batch(
+    api_key: str,
+    items: list[PageWorkItem],
+    model: str,
+    *,
+    user_prompt: str | None = None,
+) -> str:
+    prompt = user_prompt or load_transcription_prompt()
     requests_payload = [
         {
             "custom_id": batch_custom_id(item.run, item.page_num),
-            "params": build_vision_message_params(item.image_path, model),
+            "params": build_vision_message_params(item.image_path, model, user_text=prompt),
         }
         for item in items
     ]
@@ -979,9 +997,11 @@ def collect_api_work(
     work_pages: WorkPages,
     *,
     skip_front_pages: int,
+    run_only: int | None = None,
 ) -> list[PageWorkItem]:
     pending: list[PageWorkItem] = []
-    for run in range(1, NUM_RUNS + 1):
+    runs = [run_only] if run_only else list(range(1, NUM_RUNS + 1))
+    for run in runs:
         done = completed_pages_for_run(state, run)
         for page_num, image_path in work_pages:
             if page_num in done:
@@ -1035,11 +1055,12 @@ def transcribe_page(
     *,
     page_num: int,
     skip_front_pages: int = 0,
+    user_prompt: str | None = None,
 ) -> str:
     if page_should_skip_google_auto(page_num, skip_front_pages, image_path):
         return skip_line("Google boilerplate")
     try:
-        return call_claude(api_key, image_path)
+        return call_claude(api_key, image_path, user_text=user_prompt)
     except RuntimeError as exc:
         if "content filtering" in str(exc).lower() and page_should_skip_google_auto(
             page_num, skip_front_pages, image_path
@@ -1154,7 +1175,16 @@ def pages_need_content_reconcile(body1: str, body2: str) -> bool:
     return _need(body1, body2)
 
 
-def build_reconcile_params(image_path: Path, model: str, run1_text: str, run2_text: str) -> dict:
+def build_reconcile_params(
+    image_path: Path,
+    model: str,
+    run1_text: str,
+    run2_text: str,
+    lang_cfg=None,
+) -> dict:
+    norm = ""
+    if lang_cfg is not None:
+        norm = (lang_cfg.normalization_rule or "").strip()
     user_text = (
         "Reconcile two OCR passes using the page image as the only ground truth.\n\n"
         "When run 1 and run 2 disagree, look at the image and choose whichever reading "
@@ -1167,18 +1197,23 @@ def build_reconcile_params(image_path: Path, model: str, run1_text: str, run2_te
         "inconsistency, or unusual convention, transcribe it exactly as it appears on the page. "
         "Do not correct it. If the source itself does not flag it as an error, append [sic] "
         "immediately after it.\n"
-        "Old Spanish spelling conventions are correct as printed — never normalize: "
-        "fué, á, hácia, substituído.\n"
         "Do not use logical reasoning to pick the more plausible reading. The image is ground "
         "truth not plausibility. If a footnote is numbered 8 in the image transcribe 8 even if "
         "the in-text superscript is ³.\n\n"
-        "Archival rules (same as transcription):\n"
-        "- Period Spanish (fué, á, hácia, inéditas, substituído): transcribe exactly; "
-        "never modernize.\n"
-        "- Unflagged apparent errors (e.g. footnote \"8\" vs superscript ³): transcribe "
-        "as printed; append [sic] after; never silently fix.\n"
-        "- Editor-flagged errors (body misprint + footnote \"Debe ser …\"): body and "
-        "footnote verbatim; do not merge, fix the body, or add [sic].\n\n"
+    )
+    if norm:
+        user_text += f"Language-specific archival rules (auto-detected):\n{norm}\n\n"
+    else:
+        user_text += (
+            "Archival rules (same as transcription):\n"
+            "- Period Spanish (fué, á, hácia, inéditas, substituído): transcribe exactly; "
+            "never modernize.\n"
+            "- Unflagged apparent errors (e.g. footnote \"8\" vs superscript ³): transcribe "
+            "as printed; append [sic] after; never silently fix.\n"
+            "- Editor-flagged errors (body misprint + footnote \"Debe ser …\"): body and "
+            "footnote verbatim; do not merge, fix the body, or add [sic].\n\n"
+        )
+    user_text += (
         f"RUN 1:\n{run1_text}\n\n"
         f"RUN 2:\n{run2_text}\n\n"
         "Output the single best full-page transcription from the image. "
@@ -1319,6 +1354,196 @@ def _init_transcription_job(
     return work_dir, work_pages, page_range, state
 
 
+def run_source_detection(
+    api_key: str,
+    work_dir: Path,
+    state: dict,
+    page_numbers: list[int],
+    source_name: str,
+    report: Callable[..., None] | None = None,
+    *,
+    use_saved: bool = True,
+    profile_override: dict | None = None,
+) -> dict:
+    """Phase 0: detect or load saved profile. Returns profile dict (may need confirmation)."""
+    from pdf_transcribe_detect import (
+        apply_profile_to_state,
+        load_saved_source_profile,
+        pick_detection_sample_pages,
+        profile_display_lines,
+        run_phase0_detection,
+        slugify_source_name,
+    )
+
+    slug = slugify_source_name(source_name)
+    if profile_override:
+        prof = {**profile_override, "confirmed": True}
+        apply_profile_to_state(state, prof, slug)
+        save_state(work_dir, state)
+        return state["detected_source_profile"]
+
+    if use_saved:
+        saved = load_saved_source_profile(slug)
+        if saved:
+            saved["confirmed"] = True
+            saved["from_saved_config"] = True
+            apply_profile_to_state(state, saved, slug)
+            save_state(work_dir, state)
+            if report:
+                report("detecting", 0, 0, 0, None, f"Loaded saved profile for {slug}")
+            return state["detected_source_profile"]
+
+    samples = pick_detection_sample_pages(page_numbers)
+    images = [work_dir / "images" / f"page_{n:04d}.png" for n in samples if (work_dir / "images" / f"page_{n:04d}.png").is_file()]
+    if report:
+        report("detecting", 0, 0, len(page_numbers), None, f"Analyzing {len(images)} sample pages…")
+    profile = run_phase0_detection(api_key, images)
+    profile["languages_display"] = profile.get("languages_raw") or ""
+    profile["confirmed"] = False
+    state["detected_source_profile"] = profile
+    state["source_name"] = slug
+    save_state(work_dir, state)
+    return profile
+
+
+def confirm_source_profile(
+    work_dir: Path,
+    state: dict,
+    source_name: str,
+    profile: dict,
+    *,
+    language: str | None = None,
+    script: str | None = None,
+) -> None:
+    from pdf_transcribe_detect import apply_profile_to_state, slugify_source_name
+    from pdf_transcribe_lang import build_normalization_rules_text, normalize_script
+
+    prof = dict(profile)
+    prof["confirmed"] = True
+    if language:
+        prof["languages"] = {language: 1.0}
+        prof["languages_raw"] = language
+    if script:
+        prof["script"] = normalize_script(script)
+    if prof.get("languages"):
+        prof["normalization_rules"] = build_normalization_rules_text(prof["languages"])
+    apply_profile_to_state(state, prof, slugify_source_name(source_name))
+    save_state(work_dir, state)
+
+
+def ensure_source_profile_confirmed(
+    api_key: str,
+    work_dir: Path,
+    state: dict,
+    page_numbers: list[int],
+    source_name: str,
+    *,
+    use_saved: bool = True,
+    auto_confirm: bool = False,
+    language: str | None = None,
+    script: str | None = None,
+    report: Callable[..., None] | None = None,
+) -> dict:
+    """Phase 0 + optional confirmation. Raises if profile needs user confirmation."""
+    profile = state.get("detected_source_profile") or {}
+    if profile.get("confirmed"):
+        return profile
+    profile = run_source_detection(
+        api_key,
+        work_dir,
+        state,
+        page_numbers,
+        source_name,
+        report,
+        use_saved=use_saved,
+    )
+    if profile.get("confirmed"):
+        return profile
+    if auto_confirm:
+        confirm_source_profile(
+            work_dir,
+            state,
+            source_name,
+            profile,
+            language=language,
+            script=script,
+        )
+        return state["detected_source_profile"]
+    raise RuntimeError(
+        "Source profile not confirmed. Review detected settings before transcribing."
+    )
+
+
+def _run_batch_chunks(
+    api_key: str,
+    work_dir: Path,
+    state: dict,
+    work_pages: WorkPages,
+    pending: list[PageWorkItem],
+    model: str,
+    total_pages: int,
+    report: Callable[..., None],
+    *,
+    processing_mode: str,
+    batch_done: int,
+    batch_total: int,
+    user_prompt: str | None = None,
+    label: str = "Batch",
+    run_only: int | None = None,
+) -> tuple[list[PageWorkItem], int]:
+    failed_retries: list[PageWorkItem] = []
+    chunks = [pending[i : i + BATCH_MAX_REQUESTS] for i in range(0, len(pending), BATCH_MAX_REQUESTS)]
+    done = batch_done
+    for chunk_idx, chunk in enumerate(chunks):
+        if not chunk:
+            continue
+        batch_id = create_message_batch(api_key, chunk, model, user_prompt=user_prompt)
+        custom_ids = [batch_custom_id(item.run, item.page_num) for item in chunk]
+        save_batch_state(
+            work_dir,
+            {"batch_id": batch_id, "custom_ids": custom_ids, "applied": False, "chunk": chunk_idx + 1},
+        )
+
+        def on_batch_status(info: dict, _idx=chunk_idx, _done=done) -> None:
+            counts = info.get("request_counts") or {}
+            succeeded = int(counts.get("succeeded") or 0)
+            processing = int(counts.get("processing") or 0)
+            report(
+                "batch_waiting",
+                0,
+                min(_done + succeeded, total_pages),
+                total_pages,
+                None,
+                f"{label} {chunk_idx + 1}/{len(chunks)} — processing ({processing} active)…",
+                batch_done=_done + succeeded,
+                batch_total=batch_total,
+            )
+
+        report(
+            "batch_submitting",
+            0,
+            done,
+            total_pages,
+            None,
+            f"{label}: submitted {chunk_idx + 1}/{len(chunks)} ({len(chunk)} pages)…",
+            batch_done=done,
+            batch_total=batch_total,
+        )
+        info = wait_for_batch(api_key, batch_id, on_status=on_batch_status)
+        failed = _apply_batch_results(api_key, work_dir, state, batch_id, info, pending_items=chunk)
+        failed_retries.extend(failed)
+        done = batch_total - len(
+            collect_api_work(
+                state,
+                work_pages,
+                skip_front_pages=state.get("skip_front_pages", 0),
+                run_only=run_only,
+            )
+        )
+        save_batch_state(work_dir, {"batch_id": batch_id, "custom_ids": custom_ids, "applied": True})
+    return failed_retries, done
+
+
 def _finish_transcription(
     work_dir: Path,
     state: dict,
@@ -1366,8 +1591,11 @@ def run_transcription_realtime(
     processing_mode: str = "realtime",
     language: str | None = None,
     source_id: str | None = None,
+    source_name: str | None = None,
     script: str | None = None,
     explicit_pages: list[int] | None = None,
+    auto_confirm: bool = False,
+    skip_detection: bool = False,
 ) -> Path:
     work_dir = (work_dir or work_dir_for_pdf(pdf_path.resolve())).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -1418,6 +1646,24 @@ def run_transcription_realtime(
         f"PDF pages {page_range.first_page}–{page_range.last_page} ({total_pages} pages)…",
     )
     apply_local_skips(work_dir, state, work_pages, skip_front_pages=skip_front_pages)
+    if skip_detection:
+        if not (state.get("detected_source_profile") or {}).get("confirmed"):
+            raise RuntimeError("Source profile not confirmed. Run detection and confirm before transcribing.")
+    else:
+        from pdf_transcribe_detect import slugify_source_name
+
+        ensure_source_profile_confirmed(
+            api_key,
+            work_dir,
+            state,
+            page_nums,
+            source_name or state.get("source_name") or slugify_source_name(pdf_path.stem),
+            auto_confirm=auto_confirm,
+            language=language,
+            script=script,
+            report=report,
+        )
+
     tracker = ProgressTracker(
         total_pages=total_pages,
         total_api_calls=total_pages * NUM_RUNS,
@@ -1425,8 +1671,11 @@ def run_transcription_realtime(
     for run in range(1, NUM_RUNS + 1):
         tracker.completed_calls += len(completed_pages_for_run(state, run))
 
+    user_prompt = transcription_user_prompt(work_dir, state)
     job_index = 0
     for run in range(1, NUM_RUNS + 1):
+        if run == 2:
+            user_prompt = transcription_user_prompt(work_dir, state)
         done = completed_pages_for_run(state, run)
         if len(done) >= total_pages and not (work_dir / f"run{run}.txt").is_file():
             assemble_run_txt(work_dir, run, page_nums)
@@ -1454,10 +1703,17 @@ def run_transcription_realtime(
                     image_path,
                     page_num=page_num,
                     skip_front_pages=skip_front_pages,
+                    user_prompt=user_prompt,
                 )
                 time.sleep(API_DELAY_SEC)
 
             write_page_result(work_dir, state, run, page_num, text)
+        if run == 1:
+            from pdf_transcribe_detect import run_post_run1_term_pipeline
+
+            report("extracting", 1, total_pages, total_pages, None, "Extracting hard terms from run 1…")
+            run_post_run1_term_pipeline(api_key, work_dir, state)
+            save_state(work_dir, state)
 
     return _finish_transcription(
         work_dir, state, total_pages, report, api_key=api_key, use_batch=False
@@ -1475,8 +1731,11 @@ def run_transcription_batch(
     processing_mode: str = "batch",
     language: str | None = None,
     source_id: str | None = None,
+    source_name: str | None = None,
     script: str | None = None,
     explicit_pages: list[int] | None = None,
+    auto_confirm: bool = False,
+    skip_detection: bool = False,
 ) -> Path:
     settings = load_settings()
     model = settings["model"]
@@ -1532,116 +1791,73 @@ def run_transcription_batch(
     )
     apply_local_skips(work_dir, state, work_pages, skip_front_pages=skip_front_pages)
 
-    pending = collect_api_work(state, work_pages, skip_front_pages=skip_front_pages)
-    batch_total = len(pending)
-    batch_done = batch_total - len(pending)
+    if skip_detection:
+        if not (state.get("detected_source_profile") or {}).get("confirmed"):
+            raise RuntimeError("Source profile not confirmed. Run detection and confirm before transcribing.")
+    else:
+        from pdf_transcribe_detect import slugify_source_name
 
-    report(
-        "batch_submitting",
-        0,
-        0,
-        total_pages,
-        None,
-        f"Batch mode (50% off) — {batch_total} API calls queued…",
-        batch_done=batch_done,
-        batch_total=batch_total,
-    )
-
-    batch_state = load_batch_state(work_dir)
-    active_id = (batch_state.get("batch_id") or "").strip()
-    if active_id and not batch_state.get("applied"):
-        report(
-            "batch_waiting",
-            0,
-            batch_done,
-            total_pages,
-            None,
-            f"Resuming batch {active_id[:20]}…",
-            batch_done=batch_done,
-            batch_total=batch_total,
-        )
-        info = wait_for_batch(api_key, active_id)
-        resume_items: list[PageWorkItem] = []
-        for cid in batch_state.get("custom_ids") or []:
-            try:
-                kind, run_n, page_n = parse_batch_custom_id(cid)
-                if kind == "transcribe" and page_n in image_by_page:
-                    resume_items.append(
-                        PageWorkItem(
-                            run=run_n, page_num=page_n, image_path=image_by_page[page_n]
-                        )
-                    )
-            except ValueError:
-                continue
-        _apply_batch_results(api_key, work_dir, state, active_id, info, pending_items=resume_items)
-        batch_state["applied"] = True
-        save_batch_state(work_dir, batch_state)
-        pending = collect_api_work(state, work_pages, skip_front_pages=skip_front_pages)
-
-    failed_retries: list[PageWorkItem] = []
-    chunks = [
-        pending[i : i + BATCH_MAX_REQUESTS] for i in range(0, len(pending), BATCH_MAX_REQUESTS)
-    ]
-    for chunk_idx, chunk in enumerate(chunks):
-        if not chunk:
-            continue
-        batch_id = create_message_batch(api_key, chunk, model)
-        custom_ids = [batch_custom_id(item.run, item.page_num) for item in chunk]
-        save_batch_state(
+        ensure_source_profile_confirmed(
+            api_key,
             work_dir,
-            {
-                "batch_id": batch_id,
-                "custom_ids": custom_ids,
-                "applied": False,
-                "chunk": chunk_idx + 1,
-                "chunks_total": len(chunks),
-            },
+            state,
+            page_range.page_numbers,
+            source_name or state.get("source_name") or slugify_source_name(pdf_path.stem),
+            auto_confirm=auto_confirm,
+            language=language,
+            script=script,
+            report=report,
         )
 
-        def on_batch_status(info: dict) -> None:
-            counts = info.get("request_counts") or {}
-            succeeded = int(counts.get("succeeded") or 0)
-            processing = int(counts.get("processing") or 0)
-            errored = int(counts.get("errored") or 0)
-            done_now = batch_done + succeeded
-            msg = (
-                f"Batch {chunk_idx + 1}/{len(chunks)} — "
-                f"Anthropic processing ({processing} active, {errored} errors)…"
-            )
-            report(
-                "batch_waiting",
-                0,
-                min(done_now, total_pages),
-                total_pages,
-                None,
-                msg,
-                batch_done=done_now,
-                batch_total=batch_total,
-            )
+    user_prompt = transcription_user_prompt(work_dir, state)
+    failed_retries: list[PageWorkItem] = []
 
+    for run_pass in (1, 2):
+        pending = collect_api_work(
+            state, work_pages, skip_front_pages=skip_front_pages, run_only=run_pass
+        )
+        batch_total = len(pending)
+        batch_done = 0
+        if not pending:
+            continue
+        if run_pass == 2:
+            user_prompt = transcription_user_prompt(work_dir, state)
         report(
             "batch_submitting",
+            run_pass,
             0,
-            batch_done,
             total_pages,
             None,
-            f"Submitted batch {chunk_idx + 1}/{len(chunks)} ({len(chunk)} pages)…",
+            f"Run {run_pass} — {batch_total} pages queued (batch 50% off)…",
             batch_done=batch_done,
             batch_total=batch_total,
         )
-        info = wait_for_batch(api_key, batch_id, on_status=on_batch_status)
-        failed = _apply_batch_results(
-            api_key, work_dir, state, batch_id, info, pending_items=chunk
-        )
-        failed_retries.extend(failed)
-        pending = collect_api_work(state, work_pages, skip_front_pages=skip_front_pages)
-        batch_done = batch_total - len(pending)
-        save_batch_state(
+        fr, batch_done = _run_batch_chunks(
+            api_key,
             work_dir,
-            {"batch_id": batch_id, "custom_ids": custom_ids, "applied": True},
+            state,
+            work_pages,
+            pending,
+            model,
+            total_pages,
+            report,
+            processing_mode=processing_mode,
+            batch_done=batch_done,
+            batch_total=batch_total,
+            user_prompt=user_prompt,
+            label=f"Run {run_pass}",
+            run_only=run_pass,
         )
+        failed_retries.extend(fr)
+        if run_pass == 1:
+            from pdf_transcribe_detect import run_post_run1_term_pipeline
+
+            report("extracting", 1, total_pages, total_pages, None, "Extracting hard terms from run 1…")
+            run_post_run1_term_pipeline(api_key, work_dir, state)
+            save_state(work_dir, state)
 
     if failed_retries:
+        prompt = transcription_user_prompt(work_dir, state)
         report(
             "transcribing",
             0,
@@ -1659,6 +1875,7 @@ def run_transcription_batch(
                     item.image_path,
                     page_num=item.page_num,
                     skip_front_pages=skip_front_pages,
+                    user_prompt=prompt,
                 )
             except RuntimeError as exc:
                 text = f"[Transcription failed: {exc}]"
@@ -1667,6 +1884,7 @@ def run_transcription_batch(
 
     from pdf_transcribe_sanity import run_batch_content_sanity_pass
 
+    sanity_prompt = transcription_user_prompt(work_dir, state)
     collisions = run_batch_content_sanity_pass(
         api_key,
         work_dir,
@@ -1681,6 +1899,7 @@ def run_transcription_batch(
         transcribe_fn=transcribe_page,
         report=report,
         api_delay_sec=API_DELAY_SEC,
+        user_prompt=sanity_prompt,
     )
     if collisions:
         state["batch_collisions"] = list(state.get("batch_collisions") or []) + collisions
@@ -1749,37 +1968,39 @@ def run_transcription(
     processing_mode: str | None = None,
     language: str | None = None,
     source_id: str | None = None,
+    source_name: str | None = None,
     script: str | None = None,
     explicit_pages: list[int] | None = None,
+    auto_confirm: bool = False,
+    skip_detection: bool = False,
 ) -> Path:
     mode = resolve_processing_mode(processing_mode, max_pages=max_pages)
     label = processing_mode_label(processing_mode or load_settings().get("processing_mode"), max_pages=max_pages)
-    if mode == "batch":
-        return run_transcription_batch(
-            pdf_path,
-            api_key,
-            max_pages=max_pages,
-            work_dir=work_dir,
-            on_progress=on_progress,
-            skip_front_pages=skip_front_pages,
-            processing_mode=f"batch — {label}",
-            language=language,
-            source_id=source_id,
-            script=script,
-            explicit_pages=explicit_pages,
-        )
-    return run_transcription_realtime(
-        pdf_path,
-        api_key,
+    common = dict(
         max_pages=max_pages,
         work_dir=work_dir,
         on_progress=on_progress,
         skip_front_pages=skip_front_pages,
-        processing_mode=f"live — {label}",
         language=language,
         source_id=source_id,
+        source_name=source_name,
         script=script,
         explicit_pages=explicit_pages,
+        auto_confirm=auto_confirm,
+        skip_detection=skip_detection,
+    )
+    if mode == "batch":
+        return run_transcription_batch(
+            pdf_path,
+            api_key,
+            processing_mode=f"batch — {label}",
+            **common,
+        )
+    return run_transcription_realtime(
+        pdf_path,
+        api_key,
+        processing_mode=f"live — {label}",
+        **common,
     )
 
 
@@ -1826,10 +2047,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Disable sentence-level spot patches on hard-name pages",
     )
     parser.add_argument(
+        "--source-name",
+        default=None,
+        metavar="NAME",
+        help="Source id for auto-detected profile and per-source config (default: PDF filename)",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Auto-confirm detected source profile without prompting (CLI only)",
+    )
+    parser.add_argument(
         "--language",
         default=None,
-        choices=sorted({"spanish", "nahuatl", "korean", "arabic", "japanese"}),
-        help="Source language for archival rules (default: spanish)",
+        help="Optional language override (default: auto-detect from sample pages)",
     )
     parser.add_argument(
         "--source-id",
@@ -1881,6 +2112,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     explicit_pages = parse_page_list(args.pages) if args.pages else None
+    from pdf_transcribe_detect import slugify_source_name
+
+    source_name = args.source_name or slugify_source_name(args.pdf.stem)
     work_dir = run_transcription(
         args.pdf,
         api_key,
@@ -1891,8 +2125,10 @@ def main(argv: list[str] | None = None) -> int:
         processing_mode=args.processing,
         language=args.language,
         source_id=args.source_id,
+        source_name=source_name,
         script=args.script,
         explicit_pages=explicit_pages,
+        auto_confirm=args.yes,
     )
     print(f"\nDone! Your files are here:\n  {work_dir}")
     print("  run1.txt  run2.txt  transcribed.txt  reconcile_log.txt  run_summary.txt")

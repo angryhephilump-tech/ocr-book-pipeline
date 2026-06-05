@@ -176,7 +176,7 @@ def collect_spot_patch_requests(
         base = base_page_body(work_dir, page_num)
         if is_skip_body(base):
             continue
-        terms = effective_hard_terms(base, lang_cfg)
+        terms = effective_hard_terms(base, lang_cfg, state)
         if not page_has_hard_term(base, terms):
             continue
         image_path = work_dir / "images" / f"page_{page_num:04d}.png"
@@ -383,7 +383,7 @@ def finalize_pipeline(
         "batch_collisions": state.get("batch_collisions") or [],
     }
     lang_cfg = job_config_from_state(state)
-    impossible = load_impossible_strings(lang_cfg.source_id)
+    impossible = load_impossible_strings(lang_cfg.source_id, state)
 
     reconcile_items = pages_needing_reconcile(work_dir, page_numbers)
     if reconcile_items and report:
@@ -395,7 +395,7 @@ def finalize_pipeline(
                 {
                     "custom_id": reconcile_custom_id(item.page_num),
                     "params": build_reconcile_params(
-                        item.image_path, model, item.run1_text, item.run2_text
+                        item.image_path, model, item.run1_text, item.run2_text, lang_cfg
                     ),
                 }
                 for item in reconcile_items
@@ -435,7 +435,7 @@ def finalize_pipeline(
                     raw = _post_message(
                         api_key,
                         build_reconcile_params(
-                            item.image_path, model, item.run1_text, item.run2_text
+                            item.image_path, model, item.run1_text, item.run2_text, lang_cfg
                         ),
                     )
                     body, uncertain, note = parse_reconcile_output(raw)
@@ -507,7 +507,7 @@ def finalize_pipeline(
                     )
                 for page_num in pages_with_spot:
                     base = base_page_body(work_dir, page_num)
-                    terms = effective_hard_terms(base, lang_cfg)
+                    terms = effective_hard_terms(base, lang_cfg, state)
                     ops = collect_patch_operations(base, terms, lang_cfg)
                     page_results = sorted(results_by_page.get(page_num, []))
                     responses = [t for _, t in page_results]
@@ -576,7 +576,7 @@ def finalize_pipeline(
             base = base_page_body(work_dir, page_num)
             if is_skip_body(base):
                 continue
-            terms = effective_hard_terms(base, lang_cfg)
+            terms = effective_hard_terms(base, lang_cfg, state)
             if not page_has_hard_term(base, terms):
                 continue
             ops = collect_patch_operations(base, terms, lang_cfg)
@@ -591,4 +591,7 @@ def finalize_pipeline(
     stats["char_count"] = len(transcribed_path.read_text(encoding="utf-8"))
     stats["human_review_pages"] = sorted(set(stats["human_review_pages"]))
     write_summary_report(work_dir, stats)
+    from pdf_transcribe_detect import save_source_config
+
+    save_source_config(work_dir, state, stats)
     return stats
