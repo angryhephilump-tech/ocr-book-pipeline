@@ -12,8 +12,18 @@ CONFIG_DIR = ROOT_DIR / "config"
 LANGUAGES_FILE = CONFIG_DIR / "transcribe_languages.json"
 
 VALID_LANGUAGES = frozenset({"spanish", "nahuatl", "korean", "arabic", "japanese"})
+VALID_SCRIPTS = frozenset({"latin", "arabic", "korean", "japanese", "chinese"})
 DEFAULT_LANGUAGE = "spanish"
 DEFAULT_SOURCE_ID = "ixtlilxochitl"
+DEFAULT_SCRIPT = "latin"
+
+_LANGUAGE_DEFAULT_SCRIPT = {
+    "spanish": "latin",
+    "nahuatl": "latin",
+    "korean": "korean",
+    "arabic": "arabic",
+    "japanese": "japanese",
+}
 
 # Legacy default file — redirects to Ixtlilxóchitl list when no source_id set.
 LEGACY_HARD_TERMS_FILE = CONFIG_DIR / "hard_terms.txt"
@@ -58,7 +68,21 @@ def normalize_source_id(value: str | None) -> str:
     return sid or DEFAULT_SOURCE_ID
 
 
-def job_language_config(language: str | None = None, source_id: str | None = None) -> JobLanguageConfig:
+def normalize_script(value: str | None = None, language: str | None = None) -> str:
+    raw = (value or "").strip().lower()
+    if raw in VALID_SCRIPTS:
+        return raw
+    lang = normalize_language(language) if language else DEFAULT_LANGUAGE
+    catalog = _load_language_catalog()
+    meta = catalog.get(lang, {})
+    return str(meta.get("script") or _LANGUAGE_DEFAULT_SCRIPT.get(lang, DEFAULT_SCRIPT))
+
+
+def job_language_config(
+    language: str | None = None,
+    source_id: str | None = None,
+    script: str | None = None,
+) -> JobLanguageConfig:
     lang = normalize_language(language)
     sid = normalize_source_id(source_id)
     catalog = _load_language_catalog()
@@ -66,7 +90,7 @@ def job_language_config(language: str | None = None, source_id: str | None = Non
     return JobLanguageConfig(
         language=lang,
         source_id=sid,
-        script=str(meta.get("script", "latin")),
+        script=normalize_script(script or meta.get("script"), lang),
         direction=str(meta.get("direction", "ltr")),
         hyphenation_join=bool(meta.get("hyphenation_join", lang in ("spanish", "nahuatl"))),
         emphasis=str(meta.get("emphasis", "asterisk")),

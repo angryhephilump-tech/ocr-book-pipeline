@@ -140,7 +140,9 @@ def load_impossible_strings(source_id: str | None = None) -> list[str]:
 def job_config_from_state(state: dict):
     from pdf_transcribe_lang import job_language_config
 
-    return job_language_config(state.get("language"), state.get("source_id"))
+    return job_language_config(
+        state.get("language"), state.get("source_id"), state.get("script")
+    )
 
 
 def skip_line(reason: str) -> str:
@@ -226,6 +228,7 @@ def load_settings() -> dict:
         "spot_check_enabled": True,
         "language": "spanish",
         "source_id": "ixtlilxochitl",
+        "script": "latin",
     }
     path = api_key_storage_path()
     if path.is_file():
@@ -252,6 +255,8 @@ def load_settings() -> dict:
                 settings["language"] = data["language"].strip().lower()
             if (data.get("source_id") or "").strip():
                 settings["source_id"] = data["source_id"].strip().lower()
+            if (data.get("script") or "").strip():
+                settings["script"] = data["script"].strip().lower()
         except (json.JSONDecodeError, OSError):
             pass
     return settings
@@ -274,6 +279,7 @@ def save_settings(
     spot_check_enabled: bool | None = None,
     language: str | None = None,
     source_id: str | None = None,
+    script: str | None = None,
 ) -> Path:
     current = load_settings()
     if api_key is not None:
@@ -289,6 +295,8 @@ def save_settings(
         current["language"] = language.strip().lower()
     if source_id is not None:
         current["source_id"] = source_id.strip().lower()
+    if script is not None:
+        current["script"] = script.strip().lower()
     path = api_key_storage_path()
     payload = {
         "provider": PROVIDER,
@@ -299,6 +307,7 @@ def save_settings(
         "spot_check_enabled": current.get("spot_check_enabled", True),
         "language": current.get("language", "spanish"),
         "source_id": current.get("source_id", "ixtlilxochitl"),
+        "script": current.get("script", "latin"),
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     env_path = Path(__file__).resolve().parent / ".env"
@@ -316,6 +325,7 @@ def api_key_status() -> dict:
         "spot_check_enabled": settings.get("spot_check_enabled", True),
         "language": settings.get("language", "spanish"),
         "source_id": settings.get("source_id", "ixtlilxochitl"),
+        "script": settings.get("script", "latin"),
         "storage_path": str(api_key_storage_path()),
         "setup_url": "https://console.anthropic.com/settings/keys",
         "batch_discount": "50% off token usage via Anthropic Message Batches API",
@@ -1235,6 +1245,7 @@ def _init_transcription_job(
     work_dir: Path | None,
     language: str | None = None,
     source_id: str | None = None,
+    script: str | None = None,
     explicit_pages: list[int] | None = None,
 ) -> tuple[Path, WorkPages, WorkPageRange, dict]:
     pdf_path = pdf_path.resolve()
@@ -1264,8 +1275,14 @@ def _init_transcription_job(
         "max_pages": max_pages,
     }
     settings = load_settings()
+    from pdf_transcribe_lang import normalize_script
+
     job_language = (language or settings.get("language") or "spanish").strip().lower()
     job_source = (source_id or settings.get("source_id") or "ixtlilxochitl").strip().lower()
+    job_script = normalize_script(
+        (script or settings.get("script")),
+        job_language,
+    )
     state = load_state(work_dir)
     if state.get("pdf") != job_sig["pdf"] or state.get("page_numbers") != job_sig["page_numbers"]:
         state = {
@@ -1280,6 +1297,8 @@ def _init_transcription_job(
             "dpi": DPI,
             "language": job_language,
             "source_id": job_source,
+            "script": job_script,
+            "batch_collisions": [],
             "runs": {str(i): {"completed": []} for i in range(1, NUM_TRANSCRIPTION_RUNS + 1)},
             "reconcile": {"completed": []},
             "spot_check": {"completed": []},
@@ -1295,6 +1314,7 @@ def _init_transcription_job(
         state["pdf_page_count"] = pdf_count
         state["language"] = job_language
         state["source_id"] = job_source
+        state["script"] = job_script
         save_state(work_dir, state)
     return work_dir, work_pages, page_range, state
 
@@ -1346,6 +1366,7 @@ def run_transcription_realtime(
     processing_mode: str = "realtime",
     language: str | None = None,
     source_id: str | None = None,
+    script: str | None = None,
     explicit_pages: list[int] | None = None,
 ) -> Path:
     work_dir = (work_dir or work_dir_for_pdf(pdf_path.resolve())).resolve()
@@ -1383,6 +1404,7 @@ def run_transcription_realtime(
         work_dir=work_dir,
         language=language,
         source_id=source_id,
+        script=script,
         explicit_pages=explicit_pages,
     )
     page_nums = page_range.page_numbers
@@ -1453,6 +1475,7 @@ def run_transcription_batch(
     processing_mode: str = "batch",
     language: str | None = None,
     source_id: str | None = None,
+    script: str | None = None,
     explicit_pages: list[int] | None = None,
 ) -> Path:
     settings = load_settings()
@@ -1494,6 +1517,7 @@ def run_transcription_batch(
         work_dir=work_dir,
         language=language,
         source_id=source_id,
+        script=script,
         explicit_pages=explicit_pages,
     )
     total_pages = page_range.job_page_count
@@ -1641,6 +1665,27 @@ def run_transcription_batch(
             write_page_result(work_dir, state, item.run, item.page_num, text)
             time.sleep(API_DELAY_SEC)
 
+    from pdf_transcribe_sanity import run_batch_content_sanity_pass
+
+    collisions = run_batch_content_sanity_pass(
+        api_key,
+        work_dir,
+        state,
+        page_range.page_numbers,
+        image_by_page,
+        script=state.get("script", "latin"),
+        skip_front_pages=skip_front_pages,
+        is_skip_fn=is_skip_body,
+        read_page_fn=read_run_page_body,
+        write_page_fn=write_page_result,
+        transcribe_fn=transcribe_page,
+        report=report,
+        api_delay_sec=API_DELAY_SEC,
+    )
+    if collisions:
+        state["batch_collisions"] = list(state.get("batch_collisions") or []) + collisions
+        save_state(work_dir, state)
+
     return _finish_transcription(
         work_dir, state, total_pages, report, api_key=api_key, use_batch=True
     )
@@ -1704,6 +1749,7 @@ def run_transcription(
     processing_mode: str | None = None,
     language: str | None = None,
     source_id: str | None = None,
+    script: str | None = None,
     explicit_pages: list[int] | None = None,
 ) -> Path:
     mode = resolve_processing_mode(processing_mode, max_pages=max_pages)
@@ -1719,6 +1765,7 @@ def run_transcription(
             processing_mode=f"batch — {label}",
             language=language,
             source_id=source_id,
+            script=script,
             explicit_pages=explicit_pages,
         )
     return run_transcription_realtime(
@@ -1731,6 +1778,7 @@ def run_transcription(
         processing_mode=f"live — {label}",
         language=language,
         source_id=source_id,
+        script=script,
         explicit_pages=explicit_pages,
     )
 
@@ -1795,6 +1843,12 @@ def main(argv: list[str] | None = None) -> int:
         metavar="LIST",
         help="Explicit PDF page numbers (e.g. 45,60,120-125). Overrides --max-pages.",
     )
+    parser.add_argument(
+        "--script",
+        default=None,
+        choices=sorted({"latin", "arabic", "korean", "japanese", "chinese"}),
+        help="Expected output script for sanity checks (default: from language)",
+    )
     args = parser.parse_args(argv)
     try:
         api_key = resolve_api_key(args.api_key)
@@ -1804,8 +1858,12 @@ def main(argv: list[str] | None = None) -> int:
         save_settings(api_key=api_key)
     if args.no_spot_check:
         save_settings(spot_check_enabled=False)
-    if args.language or args.source_id:
-        save_settings(language=args.language, source_id=args.source_id)
+    if args.language or args.source_id or args.script:
+        save_settings(
+            language=args.language,
+            source_id=args.source_id,
+            script=args.script,
+        )
 
     def cli_progress(phase: str, run: int, page: int, total: int, eta: float | None) -> None:
         if phase == "rendering":
@@ -1833,6 +1891,7 @@ def main(argv: list[str] | None = None) -> int:
         processing_mode=args.processing,
         language=args.language,
         source_id=args.source_id,
+        script=args.script,
         explicit_pages=explicit_pages,
     )
     print(f"\nDone! Your files are here:\n  {work_dir}")

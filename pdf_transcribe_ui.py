@@ -93,11 +93,13 @@ def create_app() -> Flask:
         spot_check = request.form.get("spot_check", "1") in ("1", "on", "true", "yes")
         language = (request.form.get("language") or "spanish").strip().lower()
         source_id = (request.form.get("source_id") or "ixtlilxochitl").strip().lower()
+        script = (request.form.get("script") or "latin").strip().lower()
         pdf_transcribe.save_settings(
             processing_mode=processing_mode,
             spot_check_enabled=spot_check,
             language=language,
             source_id=source_id,
+            script=script,
         )
 
         UPLOADS.mkdir(parents=True, exist_ok=True)
@@ -121,6 +123,7 @@ def create_app() -> Flask:
                     processing_mode=processing_mode,
                     language=language,
                     source_id=source_id,
+                    script=script,
                     explicit_pages=explicit_pages,
                 )
             except ValueError as exc:

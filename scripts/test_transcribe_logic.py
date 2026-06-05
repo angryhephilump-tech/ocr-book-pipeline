@@ -15,6 +15,10 @@ from pdf_transcribe_lang import (  # noqa: E402
     pages_need_content_reconcile,
     strip_whitespace_for_compare,
 )
+from pdf_transcribe_sanity import (  # noqa: E402
+    check_page_sanity,
+    script_mismatch_detail,
+)
 from pdf_transcribe_spot import (  # noqa: E402
     REJECT_MISSING_HARD_TERM,
     apply_all_patches,
@@ -124,6 +128,31 @@ def test_missing_hard_term_rejects_patch() -> None:
     assert reason == REJECT_MISSING_HARD_TERM
 
 
+def test_script_mismatch_latin() -> None:
+    spanish = "El rey gobernó en Texcoco con sus consejeros."
+    assert script_mismatch_detail(spanish, "latin") is None
+    korean = "이것은 한국어 텍스트입니다 " * 3
+    assert script_mismatch_detail(korean, "latin") is not None
+
+
+def test_too_short_on_content_page() -> None:
+    from PIL import Image
+
+    img_path = Path(__file__).resolve().parent / "_sanity_test_page.png"
+    Image.new("L", (200, 300), color=128).save(img_path)
+    try:
+        fails = check_page_sanity(
+            "Hola.",
+            script="latin",
+            image_path=img_path,
+            is_skip_fn=pt.is_skip_body,
+        )
+        assert any(r == "too_short" for r, _ in fails)
+    finally:
+        if img_path.is_file():
+            img_path.unlink()
+
+
 def test_apply_patch_preserves_rest() -> None:
     cfg = job_language_config("spanish", "ixtlilxochitl")
     base = "Linea uno.\nNezahualcoyotl aquí.\nLinea tres."
@@ -150,6 +179,8 @@ def main() -> int:
         test_collect_patch_ops,
         test_impossible_string_rejects_patch,
         test_missing_hard_term_rejects_patch,
+        test_script_mismatch_latin,
+        test_too_short_on_content_page,
         test_apply_patch_preserves_rest,
     ]
     for fn in tests:

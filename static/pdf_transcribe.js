@@ -47,6 +47,8 @@ function syncSpotCheckUi(enabled) {
 function syncSourceUi(data) {
   const langEl = document.getElementById("language");
   if (langEl && data.language) langEl.value = data.language;
+  const scriptEl = document.getElementById("script");
+  if (scriptEl && data.script) scriptEl.value = data.script;
   const srcEl = document.getElementById("source-id");
   if (srcEl && Array.isArray(data.source_ids)) {
     const current = data.source_id || "ixtlilxochitl";

@@ -286,6 +286,7 @@ def write_summary_report(work_dir: Path, stats: dict) -> Path:
         f"Pages flagged UNCERTAIN: {stats.get('pages_uncertain', 0)}",
         f"Characters in transcribed.txt: {stats.get('char_count', 0)}",
         f"Human review pages: {stats.get('human_review_pages', [])}",
+        f"Batch collisions (sanity re-runs): {len(stats.get('batch_collisions', []))}",
     ]
     path = work_dir / "run_summary.txt"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -378,6 +379,8 @@ def finalize_pipeline(
         "human_review_pages": [],
         "language": state.get("language", "spanish"),
         "source_id": state.get("source_id", "ixtlilxochitl"),
+        "script": state.get("script", "latin"),
+        "batch_collisions": state.get("batch_collisions") or [],
     }
     lang_cfg = job_config_from_state(state)
     impossible = load_impossible_strings(lang_cfg.source_id)
