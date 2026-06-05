@@ -125,16 +125,16 @@ def load_transcription_prompt() -> str:
     )
 
 
-def load_hard_terms(source_id: str | None = None) -> list[str]:
+def load_hard_terms(source_id: str | None = None, state: dict | None = None) -> list[str]:
     from pdf_transcribe_lang import load_hard_terms as _load
 
-    return _load(source_id)
+    return _load(source_id, state)
 
 
-def load_impossible_strings(source_id: str | None = None) -> list[str]:
+def load_impossible_strings(source_id: str | None = None, state: dict | None = None) -> list[str]:
     from pdf_transcribe_lang import load_impossible_strings as _load
 
-    return _load(source_id)
+    return _load(source_id, state)
 
 
 def job_config_from_state(state: dict):
