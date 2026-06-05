@@ -1,0 +1,94 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #0f1419;
+  color: #e8eaed;
+  min-height: 100vh;
+}
+.wrap {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+}
+h1 { font-size: 1.6rem; margin: 0 0 0.35rem; font-weight: 600; }
+.sub { color: #9aa0a6; margin: 0 0 0.75rem; font-size: 0.95rem; line-height: 1.45; }
+.hint { color: #9aa0a6; margin: 0.25rem 0 0 1.5rem; font-size: 0.82rem; line-height: 1.4; }
+.api-banner {
+  margin: 0 0 1.25rem; padding: 0.5rem 0.65rem; border-radius: 8px;
+  font-size: 0.82rem; background: #1e2838; color: #9aa0a6;
+}
+.api-banner.ok { color: #81c995; }
+.api-banner.warn { color: #fdd663; background: #2a2416; }
+.drop {
+  border: 2px dashed #3c4043;
+  border-radius: 12px;
+  padding: 2rem 1rem;
+  text-align: center;
+  background: #1a1f26;
+  transition: border-color 0.15s, background 0.15s;
+  cursor: pointer;
+}
+.drop.dragover { border-color: #8ab4f8; background: #1e2838; }
+.drop-title { margin: 0; font-size: 1.1rem; }
+.drop-hint { margin: 0.4rem 0 0; color: #9aa0a6; font-size: 0.9rem; }
+.file-name { margin: 0.75rem 0 0; font-size: 0.85rem; color: #8ab4f8; word-break: break-all; }
+.link {
+  background: none; border: none; color: #8ab4f8;
+  text-decoration: underline; cursor: pointer; font: inherit;
+}
+.field { display: block; margin: 1.25rem 0; }
+.field span { display: block; margin-bottom: 0.35rem; font-size: 0.9rem; }
+.field input {
+  width: 100%; padding: 0.65rem 0.75rem;
+  border: 1px solid #3c4043; border-radius: 8px;
+  background: #1a1f26; color: #e8eaed; font-size: 1rem;
+}
+.field small { display: block; margin-top: 0.35rem; color: #9aa0a6; font-size: 0.8rem; }
+.key-saved { margin: 0 0 0.5rem; color: #81c995; font-size: 0.9rem; }
+.remember { display: flex; align-items: center; gap: 0.4rem; margin: 0.5rem 0 0; font-size: 0.85rem; color: #9aa0a6; cursor: pointer; }
+.remember input { margin: 0; }
+.remember.skip-front input[type="number"] {
+  width: 3rem; margin: 0 0.35rem; padding: 0.25rem 0.4rem;
+  border: 1px solid #3c4043; border-radius: 6px;
+  background: #1a1f26; color: #e8eaed; font-size: 0.95rem;
+}
+.key-panel { margin: 1rem 0; }
+.btn.sm { padding: 0.4rem 0.75rem; font-size: 0.85rem; }
+.field a { color: #8ab4f8; }
+.mode {
+  border: none; margin: 1rem 0; padding: 0;
+}
+.mode legend { font-size: 0.9rem; margin-bottom: 0.5rem; }
+.mode label {
+  display: block; margin: 0.4rem 0;
+  font-size: 0.95rem; cursor: pointer;
+}
+.actions { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.25rem; }
+.btn {
+  padding: 0.65rem 1.1rem; border-radius: 8px;
+  font-size: 0.95rem; cursor: pointer; border: none;
+}
+.btn.primary { background: #8ab4f8; color: #0f1419; font-weight: 600; }
+.btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.ghost {
+  background: transparent; color: #8ab4f8;
+  border: 1px solid #3c4043;
+}
+.btn.ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+.progress, .done { margin-top: 1.5rem; }
+.hidden { display: none !important; }
+.progress-msg { margin: 0 0 0.5rem; font-size: 0.95rem; }
+.bar {
+  height: 8px; background: #3c4043; border-radius: 4px; overflow: hidden;
+}
+.bar-fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, #8ab4f8, #c58af9);
+  transition: width 0.3s ease;
+}
+.progress-detail { margin: 0.5rem 0 0; font-size: 0.85rem; color: #9aa0a6; }
+.done h2 { font-size: 1.1rem; margin: 0 0 0.5rem; }
+.done ul { margin: 0.5rem 0; padding-left: 1.2rem; }
+.path { font-size: 0.8rem; color: #9aa0a6; word-break: break-all; }
+.err { color: #f28b82; margin-top: 1rem; font-size: 0.9rem; }

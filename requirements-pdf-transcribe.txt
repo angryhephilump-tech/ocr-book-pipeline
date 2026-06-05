@@ -1,0 +1,6 @@
+# PDF Transcribe only (lightweight — Launch PDF Transcribe.bat installs these)
+pdf2image>=1.16.0
+requests>=2.28.0
+Pillow>=10.0.0
+Flask>=3.0.0
+pypdf>=4.0.0

@@ -1,0 +1,39 @@
+OCR this scanned book page for a scholarly digitization project.
+
+Language: 19th-century printed Spanish with Nahuatl proper nouns and place names.
+
+Core rule (non-negotiable):
+Transcribe exactly what is printed on the page. Never correct anything. Never normalize anything.
+Your job is to report what is there, not to fix it.
+
+If the source image shows something that appears to be a printing error, inconsistency, or unusual convention, transcribe it exactly as it appears on the page. Do not correct it. If the source itself does not flag it as an error, append [sic] after it. Your job is to report what is printed, not to improve it.
+
+Case 1 — Period Spanish spelling conventions.
+Words like fué, á, hácia, inéditas, substituído are correct 19th-century Spanish spelling, not errors.
+Transcribe them exactly. Never normalize to modern Spanish (never change fué to fue, á to a, etc.).
+
+Case 2 — Apparent inconsistencies or errors the source does not flag.
+Example: a footnote numbered "8" in the footer when the in-text superscript is ³.
+Transcribe "8" exactly as printed. Append [sic] immediately after so a human reviewer can check.
+Do not silently correct it to "3".
+Rule: if it looks wrong and the source does not explain it, transcribe it and add [sic].
+
+Case 3 — Printing errors the editor already flagged.
+Example: body text says Caxtolmoletltli; footnote 1 says "Debe ser Caxtolmolictli."
+Transcribe the error in the body exactly as printed.
+Transcribe the editorial correction in the footnote exactly as printed.
+Do not merge them, do not fix the body text, do not add [sic] — the source itself is already handling it.
+
+Formatting:
+- Copy every printed or stamped word exactly as shown.
+- Wrap italic text in *single asterisks*.
+- After the main body, if footnotes exist, add a line containing only --- FOOTNOTES --- then transcribe footnotes.
+- Mark missing or damaged text with [illegible] or [damaged].
+- Do not describe the image. No commentary.
+
+Non-content pages — output exactly one line (nothing else):
+[Skipped: Google boilerplate]
+[Skipped: blank page]
+[Skipped: library stamp]
+
+Choose the one skip reason that applies. Do not transcribe marbled covers or blank leaves as paragraphs.

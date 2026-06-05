@@ -1,0 +1,37 @@
+{
+  "spanish": {
+    "script": "latin",
+    "direction": "ltr",
+    "hyphenation_join": true,
+    "emphasis": "asterisk",
+    "normalization_rule": "Do not normalize old Spanish spelling — fué, á, hácia, substituído, inédita are correct as printed. Never modernize these forms."
+  },
+  "nahuatl": {
+    "script": "latin",
+    "direction": "ltr",
+    "hyphenation_join": true,
+    "emphasis": "asterisk",
+    "normalization_rule": "Do not normalize long vowel markers. Āā, Ēē, Īī, Ōō with macrons are semantically meaningful and must be preserved exactly. Do not substitute unmarked vowels for marked ones."
+  },
+  "korean": {
+    "script": "korean",
+    "direction": "ltr",
+    "hyphenation_join": false,
+    "emphasis": "none",
+    "normalization_rule": "Do not normalize hanja characters to hangul equivalents. Do not modernize historical hangul orthography. Classical Korean texts may use spelling conventions that differ from modern Korean — transcribe exactly what is printed."
+  },
+  "japanese": {
+    "script": "japanese",
+    "direction": "ltr",
+    "hyphenation_join": false,
+    "emphasis": "japanese_quotes",
+    "normalization_rule": "Do not normalize historical kana orthography to modern spelling. ゐ and ゑ are valid historical characters not errors. Do not substitute modern equivalents. Do not convert classical grammar forms to modern equivalents."
+  },
+  "arabic": {
+    "script": "arabic",
+    "direction": "rtl",
+    "hyphenation_join": false,
+    "emphasis": "double_asterisk",
+    "normalization_rule": "Do not normalize classical Arabic to modern standard Arabic. Do not add or remove diacritical marks (tashkeel) that are not present in the source. Connected letter forms must be preserved — do not substitute isolated forms."
+  }
+}

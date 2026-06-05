@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+  <meta charset="UTF-8">
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>PDF Transcribe</title>
+
+  <link rel="stylesheet" href="/static/pdf_transcribe.css">
+
+</head>
+
+<body>
+
+  <main class="wrap">
+
+    <header>
+
+      <h1>PDF Transcribe</h1>
+
+      <p class="sub">Pipeline v2 · Opus OCR · 2 passes · reconcile content diffs · sentence-level name patches.</p>
+
+      <p class="api-banner" id="api-banner">Checking setup…</p>
+
+    </header>
+
+
+
+    <form id="form" enctype="multipart/form-data">
+
+      <div class="drop" id="drop">
+
+        <input type="file" id="file" name="pdf" accept=".pdf,application/pdf" hidden>
+
+        <p class="drop-title">Drop your PDF here</p>
+
+        <p class="drop-hint">or <button type="button" class="link" id="pick">browse</button></p>
+
+        <p class="file-name" id="file-name">No file chosen</p>
+
+      </div>
+
+
+
+      <section class="key-panel" id="key-panel">
+
+        <p class="key-saved hidden" id="key-saved">✓ Claude key saved (<span id="key-hint"></span>)</p>
+
+        <div class="key-entry hidden" id="key-entry">
+
+          <label class="field">
+
+            <span>Claude API key</span>
+
+            <input type="password" id="api-key" name="api_key" placeholder="sk-ant-…" autocomplete="off">
+
+            <small>Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> — we save it on your PC.</small>
+
+          </label>
+
+          <label class="remember"><input type="checkbox" name="remember_key" value="1" id="remember-key" checked> Remember key</label>
+
+        </div>
+
+        <button type="button" class="btn ghost sm hidden" id="change-key">Change key</button>
+
+      </section>
+
+
+
+      <fieldset class="mode">
+
+        <legend>How many pages?</legend>
+
+        <label><input type="radio" name="mode" value="test" checked> Test <strong>10 pages</strong> after skip (recommended)</label>
+        <p class="hint">Example: skip 12 + test 10 → transcribes PDF pages 13–22. Pilot: body text, Nahuatl names, footnotes, one faded page.</p>
+
+        <label><input type="radio" name="mode" value="full"> Full book (all pages)</label>
+        <label class="remember skip-front">
+          Skip first
+          <input type="number" name="skip_front_pages" id="skip-front-pages" value="2" min="0" max="30" title="Google Books notice pages at the start">
+          pages (Google notice — public domain scans)
+        </label>
+      </fieldset>
+
+      <fieldset class="mode processing-mode">
+        <legend>Cost &amp; speed</legend>
+        <label><input type="radio" name="processing_mode" value="auto" checked> <strong>Recommended</strong> — test uses live API (minutes); full book uses batch API (<strong>50% off</strong>, usually under 1 hour)</label>
+        <label><input type="radio" name="processing_mode" value="realtime"> Always live API (see each page finish, full price)</label>
+        <label><input type="radio" name="processing_mode" value="batch"> Always batch API (50% off, wait for Anthropic queue)</label>
+        <label class="remember">
+          <input type="checkbox" name="spot_check" value="1" id="spot-check" checked>
+          Patch hard-name sentences only (never replace whole pages)
+        </label>
+      </fieldset>
+
+      <fieldset class="mode source-config">
+        <legend>Source</legend>
+        <label class="field inline">
+          <span>Language</span>
+          <select name="language" id="language">
+            <option value="spanish" selected>Spanish</option>
+            <option value="nahuatl">Nahuatl</option>
+            <option value="korean">Korean</option>
+            <option value="japanese">Japanese</option>
+            <option value="arabic">Arabic (RTL)</option>
+          </select>
+        </label>
+        <label class="field inline">
+          <span>Hard terms file</span>
+          <select name="source_id" id="source-id">
+            <option value="ixtlilxochitl" selected>Ixtlilxóchitl (Texcoco)</option>
+          </select>
+        </label>
+        <p class="hint">Uses <code>config/hard_terms_&lt;source&gt;.txt</code> and <code>impossible_strings_&lt;source&gt;.txt</code></p>
+        <label class="field">
+          <span>Pilot pages (optional)</span>
+          <input type="text" name="pilot_pages" id="pilot-pages" placeholder="e.g. 45,60,120-125 — overrides test count">
+          <small>Run <code>python scripts/find_pilot_pages.py</code> on your old output to get a 20-page list.</small>
+        </label>
+      </fieldset>
+
+
+
+      <div class="actions">
+
+        <button type="submit" class="btn primary" id="start">Start transcription</button>
+
+        <button type="button" class="btn ghost" id="open-folder" disabled>Open results folder</button>
+
+      </div>
+
+    </form>
+
+
+
+    <section class="progress hidden" id="progress-panel" aria-live="polite">
+
+      <p class="progress-msg" id="progress-msg">Starting…</p>
+
+      <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+
+      <p class="progress-detail" id="progress-detail"></p>
+
+    </section>
+
+
+
+    <section class="done hidden" id="done-panel">
+
+      <h2>Finished</h2>
+
+      <ul>
+
+        <li><code>transcribed.txt</code> — final book</li>
+        <li><code>run1.txt</code> <code>run2.txt</code> <code>reconcile_log.txt</code></li>
+        <li><code>differences.txt</code> <code>run_summary.txt</code></li>
+
+      </ul>
+
+      <p class="path" id="out-path"></p>
+
+    </section>
+
+
+
+    <p class="err hidden" id="err"></p>
+
+  </main>
+
+  <script src="/static/pdf_transcribe.js"></script>
+
+</body>
+
+</html>
+

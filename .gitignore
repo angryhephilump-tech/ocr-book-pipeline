@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 venv/
 .env
+SAVE-KEY.txt
+SAVE*.txt
 output/**/*
 !output/.gitkeep
 photos/**/*
@@ -12,6 +14,8 @@ photos/**/*
 .DS_Store
 Thumbs.db
 review_state.json
+_pdf_transcribe_uploads/
+*_transcribe_output/
 vendor/tesseract/
 vendor/poppler/
 vendor/models/

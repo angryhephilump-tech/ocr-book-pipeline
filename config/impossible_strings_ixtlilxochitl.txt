@@ -1,0 +1,14 @@
+# Known corruptions — reject spot patches containing these (Ixtlilxóchitl)
+Nezahualcoyotf
+Nezahualooyotzin
+Nezahualcooyotzin
+Nezahualyotzin
+Nezahuolcoyotzin
+Nezahualpilzintli
+Nezahualpitzintli
+Ixtlilxuchtil
+Ixtlilxcchitl
+Ixtlilxuchill
+Ixtlilxutlitl
+Ixtlilxochil
+Nezahualcoyotsin

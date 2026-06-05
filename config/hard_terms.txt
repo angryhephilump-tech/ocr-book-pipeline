@@ -1,0 +1,2 @@
+# Legacy file — use per-source lists: config/hard_terms_<source_id>.txt
+# Default source: ixtlilxochitl → see hard_terms_ixtlilxochitl.txt
