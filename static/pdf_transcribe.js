@@ -279,14 +279,18 @@ async function startPrepare() {
   donePanel.classList.add("hidden");
   confirmPanel.classList.add("hidden");
   progressPanel.classList.remove("hidden");
-  setFormLocked(true);
-  startBtn.disabled = true;
-  openFolderBtn.disabled = true;
   barFill.style.width = "2%";
   progressMsg.textContent = "Uploading and analyzing sample pages…";
 
+  // Build FormData before locking — disabled inputs are omitted from FormData.
   const fd = new FormData(form);
+  const sourceName = (document.getElementById("source-name")?.value || "").trim();
+  if (sourceName) fd.set("source_name", sourceName);
   if (!document.getElementById("remember-key").checked) fd.delete("remember_key");
+
+  setFormLocked(true);
+  startBtn.disabled = true;
+  openFolderBtn.disabled = true;
 
   const pasted = (keyInput.value || "").trim();
   if (pasted) {
