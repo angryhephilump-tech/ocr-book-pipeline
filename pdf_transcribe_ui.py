@@ -165,6 +165,7 @@ def create_app() -> Flask:
         pdf_path = UPLOADS / safe
         upload.save(pdf_path)
         work_dir = pdf_transcribe.work_dir_for_pdf(pdf_path)
+        work_dir.mkdir(parents=True, exist_ok=True)
         job["work_dir"] = str(work_dir)
 
         pdf_transcribe.write_progress(

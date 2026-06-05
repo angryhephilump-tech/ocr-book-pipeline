@@ -443,6 +443,7 @@ def write_progress(
         "batch_total": batch_total,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    work_dir.mkdir(parents=True, exist_ok=True)
     progress_path(work_dir).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
