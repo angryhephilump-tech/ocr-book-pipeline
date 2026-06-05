@@ -12,6 +12,7 @@ import webbrowser
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
+from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
 import pdf_transcribe
@@ -66,9 +67,46 @@ def create_app() -> Flask:
 
     job: dict = {"thread": None, "work_dir": None, "error": None, "running": False}
 
+    @app.errorhandler(RequestEntityTooLarge)
+    def handle_too_large(_exc: RequestEntityTooLarge):
+        if request.path.startswith("/api/"):
+            return jsonify({"ok": False, "error": "PDF too large (max 500 MB)."}), 413
+        return _exc
+
+    @app.errorhandler(404)
+    def handle_404(exc):
+        if request.path.startswith("/api/"):
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": (
+                            f"Unknown API route {request.path}. "
+                            "Close the browser tab and reopen Launch PDF Transcribe.bat."
+                        ),
+                    }
+                ),
+                404,
+            )
+        return exc
+
+    @app.errorhandler(500)
+    def handle_500(exc):
+        if request.path.startswith("/api/"):
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": "Server error — check the PDF Transcribe terminal window for details.",
+                    }
+                ),
+                500,
+            )
+        return exc
+
     @app.route("/")
     def index():
-        return render_template("pdf_transcribe.html")
+        return render_template("pdf_transcribe.html", app_version=6)
 
     @app.route("/api/key-status")
     def api_key_status():
@@ -99,8 +137,7 @@ def create_app() -> Flask:
             pdf_transcribe.save_settings(api_key=resolved)
         return resolved, None
 
-    @app.route("/api/prepare", methods=["POST"])
-    def api_prepare():
+    def _api_prepare_impl():
         if job["running"]:
             return jsonify({"ok": False, "error": "A job is already running."}), 409
 
@@ -202,7 +239,7 @@ def create_app() -> Flask:
                     message=str(exc),
                 )
             finally:
-                if job.get("needs_confirmation"):
+                if job.get("error") or job.get("needs_confirmation"):
                     job["running"] = False
 
         def _start_transcription_job(
@@ -257,6 +294,15 @@ def create_app() -> Flask:
                 "processing_mode": resolved,
             }
         )
+
+    @app.route("/api/prepare", methods=["POST"])
+    @app.route("/api/start", methods=["POST"])
+    def api_prepare():
+        try:
+            return _api_prepare_impl()
+        except Exception as exc:
+            job["running"] = False
+            return jsonify({"ok": False, "error": str(exc)}), 500
 
     @app.route("/api/profile")
     def api_profile():

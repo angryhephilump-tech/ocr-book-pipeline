@@ -31,6 +31,19 @@ const CONFIRM_YES_DEFAULT = "Yes, proceed";
 const CONFIRM_YES_EDIT = "Save & proceed";
 const CONFIRM_EDIT_DEFAULT = "Edit overrides";
 
+async function parseApiResponse(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    const hint =
+      res.status === 404
+        ? "Server is out of date or wrong port — close this tab and reopen Launch PDF Transcribe.bat."
+        : `Server returned an error page instead of JSON (HTTP ${res.status}). Restart the app.`;
+    throw new Error(hint);
+  }
+}
+
 function resetConfirmUi() {
   editMode = false;
   profileEdit.classList.add("hidden");
@@ -81,7 +94,7 @@ function syncSourceUi(data) {
 async function loadKeyStatus() {
   try {
     const res = await fetch("/api/key-status");
-    const data = await res.json();
+    const data = await parseApiResponse(res);
     syncProcessingModeUi(data.processing_mode);
     syncSpotCheckUi(data.spot_check_enabled);
     syncSourceUi(data);
@@ -214,7 +227,7 @@ function hideConfirmPanel() {
 async function fetchProfile() {
   try {
     const res = await fetch("/api/profile");
-    return await res.json();
+    return await parseApiResponse(res);
   } catch (_) {
     return { ready: false };
   }
@@ -223,7 +236,7 @@ async function fetchProfile() {
 async function pollProgress() {
   try {
     const res = await fetch("/api/progress");
-    const data = await res.json();
+    const data = await parseApiResponse(res);
     if (data.work_dir) workDir = data.work_dir;
 
     if (data.awaiting_confirm || data.phase === "awaiting_confirm") {
@@ -282,10 +295,25 @@ async function startPrepare() {
   barFill.style.width = "2%";
   progressMsg.textContent = "Uploading and analyzing sample pages…";
 
+  const pdfFile = fileInput.files[0];
+  if (!pdfFile) {
+    progressPanel.classList.add("hidden");
+    errEl.textContent = "Choose a PDF file first.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+
   // Build FormData before locking — disabled inputs are omitted from FormData.
   const fd = new FormData(form);
+  fd.set("pdf", pdfFile);
   const sourceName = (document.getElementById("source-name")?.value || "").trim();
-  if (sourceName) fd.set("source_name", sourceName);
+  if (!sourceName) {
+    progressPanel.classList.add("hidden");
+    errEl.textContent = "Name this source (e.g. anales_de_tlatelolco).";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  fd.set("source_name", sourceName);
   if (!document.getElementById("remember-key").checked) fd.delete("remember_key");
 
   setFormLocked(true);
@@ -303,7 +331,7 @@ async function startPrepare() {
   }
 
   const res = await fetch("/api/prepare", { method: "POST", body: fd });
-  const data = await res.json();
+  const data = await parseApiResponse(res);
   if (!data.ok) {
     errEl.textContent = data.error || "Could not start.";
     errEl.classList.remove("hidden");
@@ -345,7 +373,7 @@ async function sendConfirm(action, overrides) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const data = await res.json();
+  const data = await parseApiResponse(res);
   if (!data.ok) {
     errEl.textContent = data.error || "Could not confirm.";
     errEl.classList.remove("hidden");
