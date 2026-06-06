@@ -157,16 +157,15 @@ def flags_to_csv(path: str, flags: list[FlaggedSpan]) -> None:
     with open(path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(
-            ["span_id", "line_index", "word_index", "text", "reason",
-             "A", "B", "C", "D", "A_conf", "B_conf", "C_conf", "D_conf"]
+            ["span_id", "line_index", "word_index", "text", "reason", "A", "B", "C", "A_conf", "B_conf", "C_conf"]
         )
         for f in flags:
             writer.writerow([
                 f.span_id, f.line_index, f.word_index, f.text, f.reason,
                 f.engine_texts.get("A", ""), f.engine_texts.get("B", ""),
-                f.engine_texts.get("C", ""), f.engine_texts.get("D", ""),
+                f.engine_texts.get("C", ""),
                 f.engine_confidences.get("A", 0), f.engine_confidences.get("B", 0),
-                f.engine_confidences.get("C", 0), f.engine_confidences.get("D", 0),
+                f.engine_confidences.get("C", 0),
             ])
 
 

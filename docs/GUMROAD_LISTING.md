@@ -9,16 +9,22 @@
 
 ## Product copy (template)
 
-**Title:** Archive Studios — Offline Book OCR & Review
+**Title:** Archive Studios — DeepSeek OCR & Review
 
-**Tagline:** Turn page photos into publisher-grade text. 100% local. Human-in-the-loop review.
+**Tagline:** Turn page photos into publisher-grade text with human-in-the-loop review.
+
+**Description (use in Gumroad body):**
+
+Supports mixed-language archival documents with strict review-first OCR and structured disagreement checks. Includes special handling for indigenous or minority language text.
 
 **Description bullets:**
-- 4-pass OCR (PaddleOCR + Tesseract)
+- 3-run DeepSeek OCR with variation (sampling + enhanced-image pass)
+- Any disagreement or low confidence is flagged for human review (no majority auto-accept)
+- Indigenous/minority language mode — lower confidence threshold and no forced normalization
 - Side-by-side review UI — nothing auto-corrected without your approval
 - PDF and image import, export to PDF + plain text
-- Works offline after one-time license activation
-- No Python, no command line, no extra downloads for buyers
+- Managed credits with Gumroad activation
+- Requires internet connection for document processing (source files remain on your machine; page images are sent to secure processing server)
 
 **Price:** (your choice — suggest $29–79 for pro OCR niche)
 
@@ -33,7 +39,7 @@
 
 ## License flow
 
-Buyers receive a license key in Gumroad email → enter on first launch → app stores activation locally → works offline forever.
+Buyers receive a license key in Gumroad email → enter on first launch → app activates page credits and begins processing through managed OCR gateway.
 
 ## Support blurb
 

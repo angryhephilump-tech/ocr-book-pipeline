@@ -1,19 +1,12 @@
 {
   "primary_language": "spa",
-  "secondary_languages": ["nah"],
+  "secondary_language": null,
+  "indigenous_minority_mode": false,
+  "confidence_threshold": 85,
+  "indigenous_confidence_threshold": 65,
   "extract_secondary": false,
   "language_labels": {
     "nah": "NAHUATL",
     "default_indigenous": "INDIGENOUS"
-  },
-  "confidence_threshold": 85,
-  "supported_primary": {
-    "spa": "Spanish",
-    "eng": "English",
-    "fra": "French"
-  },
-  "supported_secondary": {
-    "nah": "Nahuatl (classical)",
-    "ncx": "Classical Nahuatl (alt code)"
   }
 }

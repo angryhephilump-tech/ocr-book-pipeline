@@ -16,6 +16,7 @@
     </a>
     <nav class="topbar-nav">
       <span class="pill">Local · Private · Yours</span>
+      <span class="pill" id="credits-pill">Credits: --</span>
     </nav>
   </header>
 
@@ -24,11 +25,11 @@
       <p class="eyebrow">Professional book digitization</p>
       <h1>Turn page photos into <span class="gold">flawless text</span></h1>
       <p class="lede">
-        Dual-engine OCR with human review. Nothing auto-corrected —
+        DeepSeek OCR with human review. Nothing auto-corrected —
         every uncertain word gets your approval before export.
       </p>
       <ul class="feature-list">
-        <li><strong>4-pass OCR</strong> — PaddleOCR AI + Tesseract (two open-source engines, not a payment service)</li>
+        <li><strong>3-pass OCR</strong> — DeepSeek OCR with sampled variation and enhanced scan run</li>
         <li><strong>Side-by-side review</strong> — photo next to editable transcript</li>
         <li><strong>Export ready</strong> — PDF + plain text when you are done</li>
       </ul>
@@ -43,11 +44,40 @@
       <div class="card-actions card-actions-top">
         <button type="button" class="btn ghost sm" id="btn-new-project" title="Clear previous project and start over">New project</button>
       </div>
+      <p id="credits-warning" class="lang-panel-note hidden"></p>
 
       <label class="field">
         <span>Book title</span>
         <input type="text" id="book-title" placeholder="e.g. Don Quixote — Vol. I" autocomplete="off">
       </label>
+
+      <section class="lang-panel" id="lang-panel" aria-labelledby="lang-panel-title">
+        <h3 class="lang-panel-title" id="lang-panel-title">Document languages</h3>
+        <p class="lang-panel-hint">Choose the languages in your scan before transcription. Only selected packs are loaded.</p>
+
+        <label class="field">
+          <span>Primary language</span>
+          <input type="search" id="lang-primary-search" placeholder="Search… default Spanish" autocomplete="off" aria-controls="lang-primary-list">
+          <select id="lang-primary" class="lang-select" size="6" aria-label="Primary language"></select>
+        </label>
+
+        <details class="lang-advanced" id="lang-advanced">
+          <summary>Advanced language options</summary>
+          <label class="field">
+            <span>Secondary language <em class="optional">(optional)</em></span>
+            <input type="search" id="lang-secondary-search" placeholder="Search… leave empty for none" autocomplete="off" aria-controls="lang-secondary-list">
+            <select id="lang-secondary" class="lang-select" size="4" aria-label="Secondary language">
+              <option value="">— None —</option>
+            </select>
+          </label>
+        </details>
+
+        <label class="checkbox-field">
+          <input type="checkbox" id="lang-indigenous">
+          <span>Document contains indigenous or minority language text (Nahuatl, Mixtec, Maya, etc.)</span>
+        </label>
+        <p class="lang-panel-note">When checked, more uncertain words are flagged for review and spell-check validation is disabled so indigenous words are never treated as errors.</p>
+      </section>
 
       <div id="dropzone" class="dropzone" tabindex="0">
         <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png,.tif,.tiff,.webp,.bmp,.pdf,.jfif,.heic,.heif,image/*,application/pdf" hidden>
@@ -61,6 +91,16 @@
       </div>
 
       <div id="file-list" class="file-list hidden"></div>
+      <div class="card-actions card-actions-top">
+        <label class="field" style="min-width: 120px;">
+          <span>Page start</span>
+          <input type="number" id="page-start" min="1" placeholder="1">
+        </label>
+        <label class="field" style="min-width: 120px;">
+          <span>Page end</span>
+          <input type="number" id="page-end" min="1" placeholder="all">
+        </label>
+      </div>
 
       <div class="card-actions">
         <button type="button" class="btn ghost" id="btn-clear" disabled>Clear</button>
@@ -79,8 +119,32 @@
         </div>
         <div class="progress-copy">
           <p class="progress-title" id="progress-title">Transcribing…</p>
-          <p class="progress-detail" id="progress-detail">Using PaddleOCR AI and Tesseract — local only, no payment involved</p>
+          <p class="progress-detail" id="progress-detail">Using DeepSeek OCR with managed credits</p>
+          <p class="progress-pass hidden" id="progress-pass" aria-live="polite"></p>
+          <p class="progress-stale hidden" id="progress-stale" role="alert"></p>
+          <p class="progress-hint">Long books take hours. Sleep is disabled while OCR runs. If interrupted, click Start again — finished pages are skipped automatically.</p>
         </div>
+      </div>
+    </section>
+
+    <section class="studio-card">
+      <div class="card-head">
+        <h2>PDF tools</h2>
+        <p>Split, merge, or process a page range without editing originals.</p>
+      </div>
+      <label class="field">
+        <span>Split PDF ranges (example: 1-30,31-60)</span>
+        <input type="text" id="pdf-split-ranges" placeholder="1-30,31-60">
+      </label>
+      <div class="card-actions">
+        <button type="button" class="btn ghost" id="btn-pdf-split">Split selected PDF</button>
+      </div>
+      <label class="field">
+        <span>Merge PDF filenames (comma-separated, in order)</span>
+        <input type="text" id="pdf-merge-files" placeholder="part1.pdf,part2.pdf,part3.pdf">
+      </label>
+      <div class="card-actions">
+        <button type="button" class="btn ghost" id="btn-pdf-merge">Merge PDFs</button>
       </div>
     </section>
   </main>

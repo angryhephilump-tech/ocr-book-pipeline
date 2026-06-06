@@ -14,10 +14,6 @@ datas = [
 ]
 
 hiddenimports = [
-    "paddle",
-    "paddleocr",
-    "paddleocr.tools",
-    "pytesseract",
     "cv2",
     "flask",
     "werkzeug",
@@ -32,6 +28,7 @@ hiddenimports = [
     "pipeline.language",
     "pipeline.layout",
     "pipeline.ocr_engines",
+    "pipeline.gateway_client",
     "pipeline.paths",
     "pipeline.pdf_loader",
     "pipeline.preprocess",

@@ -6,7 +6,7 @@ $Python = Join-Path $Root ".venv\Scripts\python.exe"
 
 Write-Host "=== Populating vendor/ ===" -ForegroundColor Cyan
 
-# Tesseract
+# Tesseract binary + bundled top-20 language packs
 $TessSrc = "C:\Program Files\Tesseract-OCR"
 $TessDst = Join-Path $Vendor "tesseract"
 if (Test-Path $TessSrc) {
@@ -17,6 +17,8 @@ if (Test-Path $TessSrc) {
 } else {
     Write-Warning "Tesseract not found at $TessSrc — install from UB-Mannheim wiki"
 }
+
+& (Join-Path $Root "scripts\bundle_tessdata.ps1")
 
 # Poppler (winget layout)
 $PopDst = Join-Path $Vendor "poppler\bin"

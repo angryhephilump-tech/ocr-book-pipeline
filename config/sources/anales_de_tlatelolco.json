@@ -8,7 +8,7 @@
   "detected_direction": "ltr",
   "detected_era": "modern printed (late 20th/early 21st century)",
   "hard_terms_file": "hard_terms_auto_anales_de_tlatelolco.txt",
-  "impossible_strings_file": "impossible_auto_anales_de_tlatelolco.txt",
+  "impossible_strings_file": "sources/anales_de_tlatelolco/impossible_strings.txt",
   "soft_terms_file": "soft_terms_anales_de_tlatelolco.txt",
   "normalization_rules_applied": [
     "spanish",

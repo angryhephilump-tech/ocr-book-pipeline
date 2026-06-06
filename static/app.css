@@ -296,6 +296,113 @@ button, input, textarea {
   box-shadow: 0 0 0 3px var(--gold-dim);
 }
 
+.lang-panel {
+  margin-bottom: 1.25rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.lang-panel-title {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.lang-panel-hint,
+.lang-panel-note {
+  margin: 0 0 0.85rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.lang-panel-note {
+  margin-bottom: 0;
+  margin-top: 0.5rem;
+}
+
+.lang-select {
+  width: 100%;
+  margin-top: 0.35rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.lang-select option {
+  padding: 0.35rem 0.5rem;
+}
+
+.checkbox-field {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.checkbox-field input {
+  margin-top: 0.2rem;
+  accent-color: var(--gold);
+}
+
+.optional {
+  font-style: normal;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+.lang-advanced {
+  margin-top: 0.4rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+}
+
+.lang-advanced summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.lang-advanced .field {
+  margin-top: 0.7rem;
+  margin-bottom: 0.45rem;
+}
+
+.progress-pass {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  color: var(--gold);
+}
+
+.progress-hint {
+  margin: 0.65rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.progress-stale {
+  margin: 0.5rem 0 0;
+  padding: 0.55rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: #f5d76e;
+  background: rgba(180, 60, 40, 0.2);
+  border: 1px solid rgba(220, 100, 60, 0.45);
+}
+
 .dropzone {
   border: 2px dashed var(--border);
   border-radius: var(--radius);
@@ -381,6 +488,32 @@ button, input, textarea {
 }
 
 .progress-panel.hidden { display: none; }
+
+.progress-panel.progress-stale-active {
+  border-radius: var(--radius-sm);
+  outline: 1px solid rgba(220, 100, 60, 0.5);
+  outline-offset: 4px;
+}
+
+.decision-help {
+  margin: 0.5rem 0 0.8rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+
+.decision-help summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.decision-help p {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
 
 .progress-ring-wrap {
   position: relative;

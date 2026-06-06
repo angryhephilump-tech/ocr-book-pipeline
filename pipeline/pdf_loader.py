@@ -63,3 +63,14 @@ def collect_inputs(input_path: Path) -> list[Path]:
         else:
             result.append(f)
     return result
+
+
+def apply_page_range(inputs: list[Path], page_start: int | None, page_end: int | None) -> list[Path]:
+    if not inputs:
+        return inputs
+    start = max(1, int(page_start or 1))
+    end = int(page_end or len(inputs))
+    end = min(end, len(inputs))
+    if start > end:
+        return []
+    return inputs[start - 1 : end]

@@ -17,16 +17,17 @@
   <main class="hero">
     <section class="studio-card" style="max-width: 480px; margin: 2rem auto;">
       <div class="card-head">
-        <h2>Activate your license</h2>
-        <p>Enter the license key from your Gumroad receipt email. We verify once online, then this app runs fully offline.</p>
+        <h2>Activate page credits</h2>
+        <p>Enter your license key from your purchase receipt.</p>
       </div>
       <label class="field">
         <span>License key</span>
         <input type="text" id="license-key" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
       </label>
       <div class="card-actions">
-        <button type="button" class="btn primary" id="btn-verify">Verify license</button>
+        <button type="button" class="btn primary" id="btn-verify">Verify</button>
       </div>
+      <p class="drop-hint">Your key activates your page credits. Need more credits? Visit your Gumroad page.</p>
       <p id="activate-msg" class="drop-hint" style="margin-top: 1rem;"></p>
     </section>
   </main>
@@ -47,7 +48,8 @@
         const data = await res.json();
         if (data.ok) {
           msg.style.color = 'var(--success)';
-          msg.textContent = data.message || 'Activated! Redirecting…';
+          const remaining = data.credits?.remaining_credits;
+          msg.textContent = remaining != null ? `Activated — ${remaining} pages remaining.` : (data.message || 'Activated! Redirecting…');
           setTimeout(() => { window.location.href = '/'; }, 1200);
         } else {
           msg.style.color = 'var(--danger)';

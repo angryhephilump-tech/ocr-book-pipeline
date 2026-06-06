@@ -7,6 +7,8 @@
 
   const el = (id) => document.getElementById(id);
   const toast = el("toast");
+  const creditsPill = el("credits-pill");
+  const decisionHelpText = el("decision-help-text");
 
   function showToast(msg) {
     toast.textContent = msg;
@@ -17,10 +19,9 @@
   }
 
   const RUN_LABELS = {
-    A: "AI pass 1 (original)",
-    B: "AI pass 2 (enhanced)",
-    C: "Classic pass 1 (original)",
-    D: "Classic pass 2 (enhanced)",
+    A: "Run 1 (original)",
+    B: "Run 2 (original sample)",
+    C: "Run 3 (enhanced)",
   };
 
   function runLabel(runId) {
@@ -41,6 +42,19 @@
 
     el("queue-total").textContent = queue.length;
     await loadPage(queue[0]);
+    await refreshCredits();
+  }
+
+  async function refreshCredits() {
+    try {
+      const res = await fetch("/api/credits");
+      const data = await res.json();
+      const remaining = Number(data.remaining_credits ?? 0);
+      const total = Number(data.total_credits ?? 0);
+      creditsPill.textContent = `Credits: ${remaining}${total ? ` / ${total}` : ""}`;
+    } catch {
+      creditsPill.textContent = "Credits: --";
+    }
   }
 
   async function loadPage(pageId) {
@@ -86,6 +100,21 @@
     return best;
   }
 
+  function decisionGuidance(flag) {
+    const texts = Object.values(flag.engine_texts || {}).filter(Boolean);
+    const uniq = [...new Set(texts.map((t) => String(t).trim().toLowerCase()))];
+    if (uniq.length >= 3) {
+      return "All runs differ — use crop first, page context second. Do not invent text if illegible.";
+    }
+    if (uniq.length === 2) {
+      return "Two runs agree — inspect crop before accepting. Common errors: l vs i, rn vs m, accent loss.";
+    }
+    if ((flag.reason || "").includes("low_confidence")) {
+      return "Runs agree but confidence is low — verify accents, punctuation, and ambiguous letters against crop.";
+    }
+    return "Use crop first, then context. Preserve original spelling and punctuation exactly as written.";
+  }
+
   async function showCurrentFlag() {
     const flags = (currentPage.flags || []).filter((f) => !f.resolved);
     const bar = el("engine-buttons");
@@ -102,6 +131,9 @@
     if (flagIndex >= flags.length) flagIndex = flags.length - 1;
     const flag = flags[flagIndex];
     el("flag-info").textContent = `Flag ${flagIndex + 1}/${flags.length} · ${flag.reason}`;
+    if (decisionHelpText) {
+      decisionHelpText.textContent = decisionGuidance(flag);
+    }
 
     const top = topEngineSuggestion(flag);
     Object.entries(flag.engine_texts || {}).forEach(([run, text]) => {
@@ -238,4 +270,5 @@
   });
 
   loadManifest();
+  setInterval(refreshCredits, 10000);
 })();

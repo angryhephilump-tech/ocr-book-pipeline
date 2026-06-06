@@ -17,6 +17,7 @@ import shutil
 from pathlib import Path
 
 import cv2
+from pypdf import PdfReader, PdfWriter
 from werkzeug.utils import secure_filename
 
 from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
@@ -24,6 +25,9 @@ from flask import Flask, jsonify, redirect, render_template, request, send_from_
 import license
 from pipeline.export import export_pdf, export_plain_text, load_pages_for_export
 from pipeline.paths import configure_runtime, resource_root
+from ocr_book import load_project_languages, save_project_languages
+from pipeline.lang_catalog import effective_project_settings, language_name
+from pipeline.tessdata_manager import ensure_project_languages, languages_for_api
 from pipeline.web_jobs import get_job_status, is_running, reset_job, start_job
 
 configure_runtime()
@@ -66,7 +70,8 @@ def create_app(output_dir: Path, photos_dir: Path) -> Flask:
         key = (data.get("license_key") or "").strip()
         ok, message = license.verify_license_key(key)
         if ok:
-            return jsonify({"ok": True, "message": message})
+            credits = license.credits_status()
+            return jsonify({"ok": True, "message": message, "credits": credits})
         return jsonify({"ok": False, "error": message}), 400
 
     state_path = output_dir / "review_state.json"
@@ -87,6 +92,15 @@ def create_app(output_dir: Path, photos_dir: Path) -> Flask:
         if not mp.exists():
             return {"pages": []}
         return json.loads(mp.read_text(encoding="utf-8"))
+
+    def buy_more_url() -> str:
+        cfg = ROOT / "config" / "gateway.json"
+        if cfg.is_file():
+            try:
+                return str(json.loads(cfg.read_text(encoding="utf-8")).get("buy_more_credits_url") or "https://gumroad.com/")
+            except json.JSONDecodeError:
+                return "https://gumroad.com/"
+        return "https://gumroad.com/"
 
     def flagged_page_ids() -> list[str]:
         manifest = load_manifest()
@@ -112,10 +126,52 @@ def create_app(output_dir: Path, photos_dir: Path) -> Flask:
             return render_template("home.html"), 404
         return render_template("review.html")
 
+    @app.route("/api/languages")
+    def api_languages():
+        return jsonify({"languages": languages_for_api()})
+
+    @app.route("/api/project-languages", methods=["GET", "POST"])
+    def api_project_languages():
+        if request.method == "GET":
+            saved = load_project_languages(output_dir) or {}
+            return jsonify({"languages": effective_project_settings(saved)})
+
+        if is_running():
+            return jsonify({"error": "OCR is running."}), 409
+
+        data = request.get_json(silent=True) or {}
+        cfg = {
+            "primary_language": (data.get("primary_language") or "spa").strip(),
+            "secondary_language": (data.get("secondary_language") or "").strip() or None,
+            "indigenous_minority_mode": bool(data.get("indigenous_minority_mode", False)),
+        }
+        settings = effective_project_settings(cfg)
+        status = ensure_project_languages(
+            settings["primary_language"],
+            settings.get("secondary_language"),
+        )
+        failed = {k: v for k, v in status.items() if str(v).startswith("error")}
+        if failed:
+            return jsonify({"error": f"Language pack install failed: {failed}"}), 400
+        save_project_languages(output_dir, settings)
+        return jsonify(
+            {
+                "ok": True,
+                "languages": settings,
+                "primary_name": language_name(settings["primary_language"]),
+                "secondary_name": language_name(settings["secondary_language"])
+                if settings.get("secondary_language")
+                else None,
+                "tessdata_status": status,
+            }
+        )
+
     @app.route("/api/status")
     def api_status():
         uploads = list_uploads()
         manifest = load_manifest() if has_manifest() else {}
+        lang_saved = load_project_languages(output_dir)
+        credits = license.credits_status()
         return jsonify(
             {
                 "has_manifest": has_manifest(),
@@ -125,8 +181,15 @@ def create_app(output_dir: Path, photos_dir: Path) -> Flask:
                 "book_title": manifest.get("book_title"),
                 "total_pages": manifest.get("total_pages", 0),
                 "flagged_pages": manifest.get("flagged_pages", 0),
+                "languages": effective_project_settings(lang_saved or {}),
+                "credits": credits,
+                "buy_more_url": buy_more_url(),
             }
         )
+
+    @app.route("/api/credits")
+    def api_credits():
+        return jsonify(license.credits_status())
 
     @app.route("/api/upload", methods=["POST"])
     def api_upload():
@@ -181,11 +244,92 @@ def create_app(output_dir: Path, photos_dir: Path) -> Flask:
 
         data = request.get_json(silent=True) or {}
         title = (data.get("title") or "Untitled Book").strip() or "Untitled Book"
+        page_start = data.get("page_start")
+        page_end = data.get("page_end")
+        try:
+            page_start = int(page_start) if page_start not in (None, "", 0) else None
+            page_end = int(page_end) if page_end not in (None, "", 0) else None
+        except (TypeError, ValueError):
+            return jsonify({"error": "Page range must be numeric."}), 400
+        lang_cfg = {
+            "primary_language": (data.get("primary_language") or "spa").strip(),
+            "secondary_language": (data.get("secondary_language") or "").strip() or None,
+            "indigenous_minority_mode": bool(data.get("indigenous_minority_mode", False)),
+        }
+        credits = license.credits_status()
+        if int(credits.get("remaining_credits", 0)) <= 0:
+            return jsonify({"error": "No credits remaining."}), 402
+        language_config = effective_project_settings(lang_cfg)
+        save_project_languages(output_dir, language_config)
         reset_job()
-        started = start_job(photos_dir, output_dir, title=title)
+        started = start_job(
+            photos_dir,
+            output_dir,
+            title=title,
+            language_config=language_config,
+            license_key=(license.load_activation() or {}).get("license_key"),
+            page_start=page_start,
+            page_end=page_end,
+        )
         if not started:
             return jsonify({"error": "Could not start OCR."}), 409
         return jsonify({"ok": True})
+
+    @app.route("/api/pdf/split", methods=["POST"])
+    def api_pdf_split():
+        if is_running():
+            return jsonify({"error": "OCR is running."}), 409
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("filename") or "").strip()
+        ranges = data.get("ranges") or []
+        if not name or not ranges:
+            return jsonify({"error": "filename and ranges are required"}), 400
+        pdf_path = photos_dir / name
+        if not pdf_path.exists() or pdf_path.suffix.lower() != ".pdf":
+            return jsonify({"error": "PDF file not found in uploads"}), 404
+        reader = PdfReader(str(pdf_path))
+        out_dir = output_dir / "pdf_tools"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        outputs = []
+        for idx, r in enumerate(ranges, start=1):
+            start = max(1, int(r.get("start", 1)))
+            end = min(len(reader.pages), int(r.get("end", len(reader.pages))))
+            if start > end:
+                continue
+            writer = PdfWriter()
+            for page_i in range(start - 1, end):
+                writer.add_page(reader.pages[page_i])
+            out_path = out_dir / f"{pdf_path.stem}_part_{idx:02d}_{start}-{end}.pdf"
+            with out_path.open("wb") as fh:
+                writer.write(fh)
+            outputs.append(str(out_path))
+        return jsonify({"ok": True, "outputs": outputs})
+
+    @app.route("/api/pdf/merge", methods=["POST"])
+    def api_pdf_merge():
+        if is_running():
+            return jsonify({"error": "OCR is running."}), 409
+        data = request.get_json(silent=True) or {}
+        files = data.get("filenames") or []
+        out_name = str(data.get("output_name") or "merged.pdf").strip()
+        if not files:
+            return jsonify({"error": "No files provided"}), 400
+        writer = PdfWriter()
+        for name in files:
+            path = photos_dir / str(name)
+            if not path.exists() or path.suffix.lower() != ".pdf":
+                return jsonify({"error": f"Missing PDF: {name}"}), 404
+            reader = PdfReader(str(path))
+            for p in reader.pages:
+                writer.add_page(p)
+        out_dir = output_dir / "pdf_tools"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / out_name
+        if out_path.suffix.lower() != ".pdf":
+            out_path = out_path.with_suffix(".pdf")
+        with out_path.open("wb") as fh:
+            writer.write(fh)
+        return jsonify({"ok": True, "output": str(out_path)})
 
     @app.route("/api/reset-project", methods=["POST"])
     def api_reset_project():

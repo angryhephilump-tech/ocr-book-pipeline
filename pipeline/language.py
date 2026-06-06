@@ -40,6 +40,8 @@ def looks_indigenous(word: str, secondary_langs: list[str]) -> bool:
 
 
 def apply_secondary_placeholders(text: str, lang_cfg: dict) -> tuple[str, list[dict]]:
+    if lang_cfg.get("skip_dictionary_validation") or lang_cfg.get("indigenous_minority_mode"):
+        return text, []
     if lang_cfg.get("extract_secondary", False):
         return text, []
 
@@ -70,6 +72,8 @@ def apply_secondary_placeholders(text: str, lang_cfg: dict) -> tuple[str, list[d
 
 
 def detect_language_switching(text: str, lang_cfg: dict) -> bool:
+    if lang_cfg.get("skip_dictionary_validation") or lang_cfg.get("indigenous_minority_mode"):
+        return False
     words = re.findall(r"\S+", text)
     if not words:
         return False
