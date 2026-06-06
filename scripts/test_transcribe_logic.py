@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,6 +20,7 @@ from pdf_transcribe_detect import (  # noqa: E402
 from pdf_transcribe_lang import (  # noqa: E402
     build_normalization_rules_text,
     job_language_config,
+    load_impossible_strings,
     pages_need_content_reconcile,
     strip_whitespace_for_compare,
 )
@@ -26,10 +28,17 @@ from pdf_transcribe_sanity import (  # noqa: E402
     check_page_sanity,
     script_mismatch_detail,
 )
+from pdf_transcribe_source import (  # noqa: E402
+    SourceIdentityError,
+    classify_page_section,
+    direction_for_script,
+    ensure_source_identity,
+)
 from pdf_transcribe_spot import (  # noqa: E402
     REJECT_MISSING_HARD_TERM,
     apply_all_patches,
     bracket_terms_in_sentence,
+    cap_patch_operations,
     collect_patch_operations,
     validate_patch_response,
 )
@@ -169,10 +178,99 @@ def test_parse_detection_response() -> None:
     assert "spanish" in profile["languages"]
     assert "kaqchikel" in profile["languages"]
     assert profile["script"] == "latin"
+    assert profile["direction"] == "ltr"
     assert profile["seed_hard_terms"] == ["Hunyg", "Atitlan"]
     rules = profile["normalization_rules"]
     assert "Kaqchikel" in rules or "kaqchikel" in rules.lower()
     assert "Spanish" in rules or "fué" in rules
+
+
+def test_latin_script_forces_ltr() -> None:
+    assert direction_for_script("latin", "rtl") == "ltr"
+    assert direction_for_script("latin", "mixed") == "ltr"
+    assert direction_for_script("arabic", "ltr") == "rtl"
+    raw = """{"languages": "Spanish 70%, Nahuatl 30%", "script": "Latin",
+    "direction": "right-to-left", "era": "modern", "seed_hard_terms": [],
+    "footnotes": false, "headers": false, "avg_words_per_page": 200}"""
+    profile = parse_detection_response(raw)
+    assert profile["direction"] == "ltr"
+
+
+def test_source_identity_mismatch_raises() -> None:
+    state = {"source_name": "anales_de_tlatelolco", "source_id": "ixtlilxochitl"}
+    try:
+        ensure_source_identity(state)
+        raise AssertionError("expected SourceIdentityError")
+    except SourceIdentityError:
+        pass
+
+
+def test_impossible_strings_per_source() -> None:
+    state = {
+        "source_name": "anales_de_tlatelolco",
+        "source_id": "anales_de_tlatelolco",
+        "impossible_strings": [],
+    }
+    imp = load_impossible_strings(state=state)
+    assert "unoaconejaron" in [s.lower() for s in imp]
+
+
+def test_patch_cap() -> None:
+    cfg = job_language_config("spanish", "test")
+    text = "\n".join(
+        f"Ordenanza {i} con Nezahualcoyotl y Texcoco en la línea."
+        for i in range(20)
+    )
+    terms = ["Nezahualcoyotl", "Texcoco"]
+    ops = collect_patch_operations(text, terms, cfg)
+    capped = cap_patch_operations(ops, 8)
+    assert len(capped) <= 8
+    assert len(ops) > 8
+
+
+def test_classify_page_section() -> None:
+    paleo = "Moquiuix [tlahcuilolli] y [xochitl] con macrones Āā en náhuatl."
+    assert classify_page_section(paleo) == "paleographic_nahuatl"
+    spanish = "Capítulo introductorio de la biblioteca universitaria."
+    assert classify_page_section(spanish) == "editorial_spanish"
+
+
+def test_integrity_heal_stale_state() -> None:
+    from pdf_transcribe_integrity import heal_stale_state
+
+    wd = Path(tempfile.mkdtemp()) / "work"
+    wd.mkdir()
+    (wd / "state.json").write_text(
+        '{"source_name": "anales_de_tlatelolco", "source_id": "ixtlilxochitl"}',
+        encoding="utf-8",
+    )
+    report = heal_stale_state(wd, "anales_de_tlatelolco")
+    assert report.fixes
+    assert not (wd / "state.json").is_file()
+
+
+def test_impossible_strings_source_header() -> None:
+    from pdf_transcribe_integrity import (
+        read_impossible_strings_file,
+        write_impossible_strings_file,
+    )
+
+    slug = "test_source"
+    path = write_impossible_strings_file(slug, ["badtypo", "otherbad"])
+    assert path.is_file()
+    loaded = read_impossible_strings_file(path, slug)
+    assert loaded == ["badtypo", "otherbad"]
+    assert read_impossible_strings_file(path, "other_source") is None
+
+
+def test_source_lock_blocks_mismatch() -> None:
+    from pdf_transcribe_integrity import run_startup_integrity, write_source_lock
+
+    wd = Path(tempfile.mkdtemp()) / "work"
+    wd.mkdir()
+    write_source_lock(wd, "ixtlilxochitl")
+    report, _ = run_startup_integrity(wd, "anales_de_tlatelolco")
+    assert report.blocking
 
 
 def test_kaqchikel_normalization_threshold() -> None:
@@ -234,6 +332,14 @@ def main() -> int:
         test_too_short_on_content_page,
         test_apply_patch_preserves_rest,
         test_parse_detection_response,
+        test_latin_script_forces_ltr,
+        test_source_identity_mismatch_raises,
+        test_impossible_strings_per_source,
+        test_patch_cap,
+        test_classify_page_section,
+        test_integrity_heal_stale_state,
+        test_impossible_strings_source_header,
+        test_source_lock_blocks_mismatch,
         test_kaqchikel_normalization_threshold,
         test_merge_hard_terms,
         test_slugify_source_name,

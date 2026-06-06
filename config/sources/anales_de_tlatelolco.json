@@ -1,0 +1,23 @@
+{
+  "source_name": "anales_de_tlatelolco",
+  "detected_languages": {
+    "spanish": 0.7,
+    "nahuatl": 0.3
+  },
+  "detected_script": "latin",
+  "detected_direction": "ltr",
+  "detected_era": "modern printed (late 20th/early 21st century)",
+  "hard_terms_file": "hard_terms_auto_anales_de_tlatelolco.txt",
+  "impossible_strings_file": "impossible_auto_anales_de_tlatelolco.txt",
+  "soft_terms_file": "soft_terms_anales_de_tlatelolco.txt",
+  "normalization_rules_applied": [
+    "spanish",
+    "nahuatl"
+  ],
+  "footnotes": true,
+  "headers": true,
+  "run_date": "2026-06-05",
+  "pages_processed": 10,
+  "accuracy_notes": "Intentional spelling variation: Nahuatl paleographic pages use colonial forms (e.g. Moquiuix without accent); Spanish translation pages use modern forms (e.g. Moquíhuix). Do not standardize across sections. Confirmed both-runs-wrong: unoaconejaron → aconsejaron (line-break merge error).",
+  "spelling_variation_notes": "Moquiuix/Moquíhuix/Moquihuix vary by section — paleographic Nahuatl vs modern Spanish translation. Do not auto-standardize."
+}

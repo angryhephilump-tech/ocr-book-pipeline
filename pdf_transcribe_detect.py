@@ -37,7 +37,14 @@ Return your answer as JSON only, no preamble. Use this schema:
 
 HARD_TERM_EXTRACT_PROMPT = """Scan this transcription and extract every token that: (a) is 10 or more characters with no spaces, (b) contains non-standard character combinations for the detected language, or (c) appears to be a proper noun, place name, or technical term. Return as a JSON list of unique strings, sorted by frequency descending. JSON only, no preamble."""
 
-IMPOSSIBLE_STRINGS_PROMPT = """Given this list of hard terms that should appear in this transcription, generate a list of corrupted variants that should never appear — common OCR errors including: transposed adjacent characters, doubled characters, dropped characters, substituted similar-looking characters (l/I/1, o/0, u/v, rn/m, cl/d). Return as a JSON list. JSON only, no preamble. Hard terms:
+IMPOSSIBLE_STRINGS_PROMPT = """Given this list of hard terms that should appear in this transcription, generate a list of corrupted variants that should NEVER appear — obvious OCR typos only: transposed adjacent characters, doubled characters, dropped characters, substituted similar-looking characters (l/I/1, o/0, u/v, rn/m, cl/d).
+
+Rules:
+— Do NOT include alternate valid spellings, colonial orthography, cedilla variants, or manuscript forms.
+— Do NOT include any string that could be correct in this specific document.
+— Do NOT include common Spanish dictionary words.
+— Maximum 40 items.
+Return as a JSON list. JSON only, no preamble. Hard terms:
 {terms}"""
 
 SOURCES_DIR = CONFIG_DIR / "sources"
@@ -55,7 +62,9 @@ def hard_terms_auto_path(source_name: str) -> Path:
 
 
 def impossible_auto_path(source_name: str) -> Path:
-    return CONFIG_DIR / f"impossible_auto_{slugify_source_name(source_name)}.txt"
+    from pdf_transcribe_integrity import impossible_strings_file
+
+    return impossible_strings_file(source_name)
 
 
 def slugify_source_name(name: str) -> str:
@@ -103,6 +112,8 @@ def normalize_script_from_detection(raw: str) -> str:
 
 
 def parse_detection_response(text: str) -> dict:
+    from pdf_transcribe_source import direction_for_script
+
     data = _extract_json_blob(text)
     if not isinstance(data, dict):
         raise ValueError("Detection response was not a JSON object.")
@@ -111,11 +122,13 @@ def parse_detection_response(text: str) -> dict:
     seed = data.get("seed_hard_terms") or data.get("hard_terms") or []
     if isinstance(seed, str):
         seed = [s.strip() for s in seed.split(",") if s.strip()]
+    script = normalize_script_from_detection(str(data.get("script", "latin")))
+    direction = direction_for_script(script, normalize_direction(str(data.get("direction", "ltr"))))
     return {
         "languages_raw": langs_raw,
         "languages": lang_pcts,
-        "script": normalize_script_from_detection(str(data.get("script", "latin"))),
-        "direction": normalize_direction(str(data.get("direction", "ltr"))),
+        "script": script,
+        "direction": direction,
         "era": str(data.get("era") or "").strip(),
         "seed_hard_terms": [str(t).strip() for t in seed if str(t).strip()][:20],
         "footnotes": _as_bool(data.get("footnotes")),
@@ -152,19 +165,33 @@ def profile_display_lines(profile: dict) -> list[str]:
 
 
 def apply_profile_to_state(state: dict, profile: dict, source_name: str) -> None:
+    from pdf_transcribe_source import direction_for_script, source_accuracy_notes
+
     lang_pcts = profile.get("languages") or {}
     primary = max(lang_pcts, key=lang_pcts.get) if lang_pcts else "spanish"
     slug = slugify_source_name(source_name)
+    script = profile.get("script") or "latin"
+    direction = direction_for_script(script, profile.get("direction"))
     state["source_name"] = slug
     state["source_id"] = slug
-    state["detected_source_profile"] = {**profile, "source_name": slug, "confirmed": True}
+    state["detected_source_profile"] = {
+        **profile,
+        "source_name": slug,
+        "confirmed": True,
+        "script": script,
+        "direction": direction,
+    }
     state["language"] = primary
-    state["script"] = profile.get("script") or "latin"
-    state["direction"] = profile.get("direction") or "ltr"
+    state["script"] = script
+    state["direction"] = direction
     state["normalization_rules"] = profile.get("normalization_rules") or ""
     state["hard_terms_file"] = str(hard_terms_auto_path(slug))
     state["impossible_strings_file"] = str(impossible_auto_path(slug))
     state["seed_hard_terms"] = list(profile.get("seed_hard_terms") or [])
+    state["impossible_strings"] = []
+    notes = source_accuracy_notes(slug)
+    if notes:
+        state["accuracy_notes"] = notes
     _write_seed_hard_terms(slug, state["seed_hard_terms"])
 
 
@@ -176,6 +203,8 @@ def _write_seed_hard_terms(source_slug: str, terms: list[str]) -> Path:
 
 
 def load_saved_source_profile(source_name: str) -> dict | None:
+    from pdf_transcribe_source import direction_for_script
+
     path = source_config_path(source_name)
     if not path.is_file():
         return None
@@ -187,7 +216,10 @@ def load_saved_source_profile(source_name: str) -> dict | None:
             for k, v in (data.get("detected_languages") or {}).items()
         ),
         "script": data.get("detected_script", "latin"),
-        "direction": data.get("detected_direction", "ltr"),
+        "direction": direction_for_script(
+            data.get("detected_script", "latin"),
+            data.get("detected_direction", "ltr"),
+        ),
         "era": data.get("detected_era", ""),
         "seed_hard_terms": _read_terms_file(data.get("hard_terms_file")),
         "footnotes": data.get("footnotes", False),
@@ -223,6 +255,14 @@ def save_source_config(work_dir: Path, state: dict, stats: dict) -> Path:
     slug = state.get("source_name") or state.get("source_id") or "unknown"
     hard_file = f"hard_terms_auto_{slug}.txt"
     imp_file = f"impossible_auto_{slug}.txt"
+    from pdf_transcribe_source import source_accuracy_notes
+
+    notes = (
+        stats.get("accuracy_notes")
+        or state.get("accuracy_notes")
+        or source_accuracy_notes(slug)
+        or ""
+    )
     payload = {
         "source_name": slug,
         "detected_languages": profile.get("languages") or {},
@@ -231,13 +271,16 @@ def save_source_config(work_dir: Path, state: dict, stats: dict) -> Path:
         "detected_era": profile.get("era", ""),
         "hard_terms_file": hard_file,
         "impossible_strings_file": imp_file,
+        "soft_terms_file": f"soft_terms_{slug}.txt",
         "normalization_rules_applied": profile.get("normalization_languages")
         or list((profile.get("languages") or {}).keys()),
         "footnotes": profile.get("footnotes", False),
         "headers": profile.get("headers", False),
+        "page_sections": state.get("page_sections") or {},
+        "spelling_variation_notes": notes,
         "run_date": date.today().isoformat(),
         "pages_processed": stats.get("total_pages", 0),
-        "accuracy_notes": stats.get("accuracy_notes", ""),
+        "accuracy_notes": notes,
     }
     path = source_config_path(slug)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -451,10 +494,16 @@ def generate_impossible_strings(
 def run_post_run1_term_pipeline(api_key: str, work_dir: Path, state: dict) -> None:
     """Merge seed + run1 extraction; write auto hard terms and impossible strings."""
     from pdf_transcribe import assemble_run_txt, job_page_numbers
+    from pdf_transcribe_source import (
+        ensure_source_identity,
+        filter_generated_impossible,
+        load_impossible_extra,
+        tag_page_sections_from_run1,
+    )
 
-    slug = state.get("source_name") or state.get("source_id") or "unknown"
+    slug = ensure_source_identity(state)
     nums = job_page_numbers(state)
-    assemble_run_txt(work_dir, 1, nums)
+    assemble_run_txt(work_dir, 1, nums, source_slug=slug)
     run1_path = work_dir / "run1.txt"
     run1_text = run1_path.read_text(encoding="utf-8") if run1_path.is_file() else ""
     seed = list(state.get("seed_hard_terms") or [])
@@ -469,12 +518,24 @@ def run_post_run1_term_pipeline(api_key: str, work_dir: Path, state: dict) -> No
         "Auto-generated: Phase 0 seeds + run 1 extraction",
     )
     impossible = generate_impossible_strings(api_key, merged)
-    imp_path = impossible_auto_path(slug)
-    write_hard_terms_file(
-        imp_path,
+    impossible = filter_generated_impossible(impossible, merged)
+    impossible.extend(load_impossible_extra(slug))
+    seen_imp: set[str] = set()
+    deduped: list[str] = []
+    for item in impossible:
+        key = item.lower()
+        if key and key not in seen_imp:
+            seen_imp.add(key)
+            deduped.append(item)
+    impossible = deduped
+    from pdf_transcribe_integrity import write_impossible_strings_file
+
+    imp_path = write_impossible_strings_file(
+        slug,
         impossible,
-        "Auto-generated corrupted variants from hard terms",
+        note="Auto-generated corrupted variants from hard terms (this source only)",
     )
+    tag_page_sections_from_run1(work_dir, state)
     state["hard_terms"] = merged
     state["impossible_strings"] = impossible
     state["hard_terms_file"] = str(hard_path)

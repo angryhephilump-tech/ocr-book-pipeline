@@ -43,6 +43,7 @@ def _parse_job_form() -> tuple[dict, str | None]:
     source_name = (request.form.get("source_name") or "").strip()
     if not source_name:
         return {}, "Name this source (e.g. kaqchikel_chronicles)."
+    work_dir_custom = (request.form.get("work_dir") or "").strip() or None
 
     return {
         "max_pages": max_pages,
@@ -54,6 +55,7 @@ def _parse_job_form() -> tuple[dict, str | None]:
         "source_id": source_id,
         "script": script,
         "source_name": source_name,
+        "work_dir": work_dir_custom,
     }, None
 
 
@@ -164,9 +166,28 @@ def create_app() -> Flask:
         safe = secure_filename(upload.filename) or "book.pdf"
         pdf_path = UPLOADS / safe
         upload.save(pdf_path)
-        work_dir = pdf_transcribe.work_dir_for_pdf(pdf_path)
+        from pdf_transcribe_integrity import (
+            run_startup_integrity,
+            work_dir_contains_source_name,
+        )
+
+        work_dir = pdf_transcribe.work_dir_for_pdf(
+            pdf_path,
+            params["source_name"],
+            custom_work_dir=params.get("work_dir"),
+        )
         work_dir.mkdir(parents=True, exist_ok=True)
+        integrity, _healed = run_startup_integrity(work_dir, params["source_name"])
+        if integrity.blocking:
+            return jsonify({"ok": False, "error": integrity.blocking[0]}), 409
         job["work_dir"] = str(work_dir)
+        job["integrity"] = integrity.to_dict()
+        folder_warn = None
+        if not work_dir_contains_source_name(work_dir, params["source_name"]):
+            folder_warn = (
+                f"Tip: consider naming this folder after your source ({params['source_name']}) "
+                "to avoid mixing runs."
+            )
 
         pdf_transcribe.write_progress(
             work_dir,
@@ -201,6 +222,7 @@ def create_app() -> Flask:
                     work_dir=work_dir,
                     language=params["language"],
                     source_id=params["source_id"],
+                    source_name=params["source_name"],
                     script=params["script"],
                     explicit_pages=params["explicit_pages"],
                 )
@@ -293,6 +315,8 @@ def create_app() -> Flask:
                 "work_dir": str(work_dir),
                 "message": f"Detecting source profile · {mode_label}",
                 "processing_mode": resolved,
+                "integrity": integrity.to_dict(),
+                "folder_warning": folder_warn,
             }
         )
 
@@ -422,6 +446,35 @@ def create_app() -> Flask:
         threading.Thread(target=worker, daemon=True).start()
         return jsonify({"ok": True, "work_dir": work_dir, "message": "Transcription started."})
 
+    @app.route("/api/pilot-status")
+    def api_pilot_status():
+        source_name = (request.args.get("source_name") or "").strip()
+        if not source_name:
+            return jsonify({"ok": False, "error": "source_name required"}), 400
+        from pdf_transcribe_integrity import pilot_gate_status
+
+        return jsonify({"ok": True, **pilot_gate_status(source_name)})
+
+    @app.route("/api/reset-source", methods=["POST"])
+    def api_reset_source():
+        data = request.get_json(silent=True) or {}
+        source_name = (data.get("source_name") or "").strip()
+        work_dir_raw = (data.get("work_dir") or job.get("work_dir") or "").strip()
+        if not source_name:
+            return jsonify({"ok": False, "error": "source_name required"}), 400
+        if not work_dir_raw:
+            return jsonify({"ok": False, "error": "work_dir required"}), 400
+        from pdf_transcribe_integrity import reset_source_work_dir
+
+        deleted = reset_source_work_dir(Path(work_dir_raw), source_name)
+        return jsonify(
+            {
+                "ok": True,
+                "deleted": deleted,
+                "message": f"Reset {source_name} — {len(deleted)} item(s) removed.",
+            }
+        )
+
     @app.route("/api/progress")
     def api_progress():
         work_dir = job.get("work_dir")
@@ -434,6 +487,9 @@ def create_app() -> Flask:
             data["error"] = job.get("error")
             data["work_dir"] = work_dir
             data["awaiting_confirm"] = bool(job.get("needs_confirmation"))
+            pilot_path = Path(work_dir) / "pilot_report.json"
+            if pilot_path.is_file():
+                data["pilot_report"] = json.loads(pilot_path.read_text(encoding="utf-8"))
             return jsonify(data)
         return jsonify(
             {

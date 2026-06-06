@@ -1,0 +1,6 @@
+# Stable place names — logged but not sent to spot-patch API for this source
+Tlatelolco
+Tenochtitlan
+Azcapotzalco
+México
+Méjico

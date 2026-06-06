@@ -44,16 +44,41 @@ def bracket_terms_in_sentence(sentence: str, terms: list[str]) -> str:
     return out
 
 
+_SECTION_HINTS: dict[str, str] = {
+    "paleographic_nahuatl": (
+        "This page is a paleographic Nahuatl section — preserve colonial spellings, "
+        "cedillas, and bracketed manuscript reconstructions exactly as printed. "
+        "Do not apply modern Spanish accent normalization.\n"
+    ),
+    "spanish_translation": (
+        "This page is a modern Spanish translation section — use modern Spanish "
+        "orthography for proper names (accents as in the edition). "
+        "Do not preserve colonial Nahuatl spellings on this page.\n"
+    ),
+    "editorial_spanish": (
+        "This page is editorial/front matter in modern Spanish.\n"
+    ),
+    "mixed": (
+        "This page mixes Spanish and Nahuatl — preserve each term exactly as printed "
+        "in the image without cross-section normalization.\n"
+    ),
+}
+
+
 def build_patch_prompt(
     sentence: str,
     terms: list[str],
     lang_cfg: JobLanguageConfig,
+    *,
+    section_hint: str | None = None,
 ) -> str:
     bracketed = bracket_terms_in_sentence(sentence, terms)
     term_list = ", ".join(terms)
+    section_note = _SECTION_HINTS.get(section_hint or "", "")
     return (
         "You are verifying a single sentence from a transcription of a historical book. "
         "The full page image is provided so you can locate and read the relevant text.\n"
+        f"{section_note}"
         f"Source language: {lang_cfg.language}\n"
         f"Source script: {lang_cfg.script}\n"
         f"Script direction: {lang_cfg.direction}\n"
@@ -305,6 +330,26 @@ def collect_patch_operations(
             section_offset += len(FOOTNOTE_SEP)
 
     return operations
+
+
+def patch_operation_priority(op: PatchOperation) -> tuple[int, int, int]:
+    max_term = max((len(t) for t in op.terms), default=0)
+    return (max_term, len(op.terms), len(op.sentence))
+
+
+def cap_patch_operations(
+    operations: list[PatchOperation],
+    max_per_page: int = 8,
+) -> list[PatchOperation]:
+    if len(operations) <= max_per_page:
+        return operations
+    ranked = sorted(
+        enumerate(operations),
+        key=lambda item: patch_operation_priority(item[1]),
+        reverse=True,
+    )
+    keep_indices = sorted(idx for idx, _ in ranked[:max_per_page])
+    return [operations[i] for i in keep_indices]
 
 
 def _emphasis_markers(sentence: str, lang_cfg: JobLanguageConfig) -> dict[str, int]:

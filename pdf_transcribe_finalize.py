@@ -47,7 +47,14 @@ from pdf_transcribe import (
     anthropic_request,
 )
 from pdf_transcribe_lang import effective_hard_terms, page_has_hard_term
-from pdf_transcribe_spot import PatchOperation, apply_all_patches, collect_patch_operations
+from pdf_transcribe_source import (
+    optimize_soft_terms_from_log,
+    page_section_hint,
+    resolve_source_slug,
+    spot_patch_operations_for_page,
+    tag_page_sections_from_run1,
+)
+from pdf_transcribe_spot import PatchOperation, apply_all_patches
 
 
 @dataclass(frozen=True)
@@ -182,7 +189,7 @@ def collect_spot_patch_requests(
         image_path = work_dir / "images" / f"page_{page_num:04d}.png"
         if not image_path.is_file():
             continue
-        ops = collect_patch_operations(base, terms, lang_cfg)
+        ops = spot_patch_operations_for_page(base, lang_cfg, state)
         for op in ops:
             requests.append(
                 SpotPatchRequest(page_num=page_num, image_path=image_path, operation=op)
@@ -258,10 +265,32 @@ def write_reconcile_log(work_dir: Path, entries: list[dict]) -> Path:
     return path
 
 
-def build_transcribed_txt(work_dir: Path, page_numbers: list[int]) -> Path:
+def build_transcribed_txt(
+    work_dir: Path,
+    page_numbers: list[int],
+    *,
+    state: dict | None = None,
+) -> Path:
+    from pdf_transcribe_integrity import (
+        read_source_lock,
+        verify_run_file_headers,
+        write_sourced_text,
+    )
+
+    mismatches = verify_run_file_headers(work_dir)
+    if mismatches:
+        raise RuntimeError(
+            "Cannot assemble transcribed.txt — run file source headers do not match: "
+            + "; ".join(mismatches)
+        )
     parts = [format_page_block(n, final_page_body(work_dir, n)) for n in page_numbers]
     path = work_dir / "transcribed.txt"
-    path.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
+    body = "\n\n".join(parts) + "\n"
+    slug = (state or {}).get("source_name") or (state or {}).get("source_id") or read_source_lock(work_dir)
+    if slug:
+        write_sourced_text(path, slug, body)
+    else:
+        path.write_text(body, encoding="utf-8")
     return path
 
 
@@ -354,8 +383,9 @@ def finalize_pipeline(
 ) -> dict:
     page_numbers = job_page_numbers(state)
     total_pages = len(page_numbers)
+    slug = state.get("source_name") or state.get("source_id")
     for run in range(1, NUM_TRANSCRIPTION_RUNS + 1):
-        assemble_run_txt(work_dir, run, page_numbers)
+        assemble_run_txt(work_dir, run, page_numbers, source_slug=slug)
     generate_differences(work_dir)
 
     log_entries: list[dict] = []
@@ -384,6 +414,9 @@ def finalize_pipeline(
     }
     lang_cfg = job_config_from_state(state)
     impossible = load_impossible_strings(lang_cfg.source_id, state)
+    if not state.get("page_sections"):
+        tag_page_sections_from_run1(work_dir, state)
+        save_state(work_dir, state)
 
     reconcile_items = pages_needing_reconcile(work_dir, page_numbers)
     if reconcile_items and report:
@@ -487,6 +520,7 @@ def finalize_pipeline(
                             req.operation.sentence,
                             list(req.operation.terms),
                             lang_cfg,
+                            section_hint=page_section_hint(state, req.page_num),
                         ),
                     }
                     for req in patch_requests
@@ -507,8 +541,7 @@ def finalize_pipeline(
                     )
                 for page_num in pages_with_spot:
                     base = base_page_body(work_dir, page_num)
-                    terms = effective_hard_terms(base, lang_cfg, state)
-                    ops = collect_patch_operations(base, terms, lang_cfg)
+                    ops = spot_patch_operations_for_page(base, lang_cfg, state)
                     page_results = sorted(results_by_page.get(page_num, []))
                     responses = [t for _, t in page_results]
                     if len(responses) < len(ops):
@@ -550,6 +583,7 @@ def finalize_pipeline(
                                     req.operation.sentence,
                                     list(req.operation.terms),
                                     lang_cfg,
+                                    section_hint=page_section_hint(state, page_num),
                                 ),
                             )
                             responses.append(normalize_transcription_output(raw))
@@ -579,19 +613,38 @@ def finalize_pipeline(
             terms = effective_hard_terms(base, lang_cfg, state)
             if not page_has_hard_term(base, terms):
                 continue
-            ops = collect_patch_operations(base, terms, lang_cfg)
+            ops = spot_patch_operations_for_page(base, lang_cfg, state)
             if not ops:
                 stats["spot_expected_no_patch"].append(page_num)
                 stats["human_review_pages"].append(page_num)
             mark_special_page_complete(state, "spot_check", page_num)
         save_state(work_dir, state)
 
-    transcribed_path = build_transcribed_txt(work_dir, page_numbers)
+    slug = resolve_source_slug(state)
+    if slug:
+        from pdf_transcribe_integrity import log_soft_term_promotions
+        from pdf_transcribe_source import load_soft_terms
+
+        before = load_soft_terms(slug, state)
+        optimize_soft_terms_from_log(work_dir, slug, state)
+        promoted = state.get("soft_terms_promoted") or []
+        if promoted:
+            log_soft_term_promotions(work_dir, slug, before, state.get("soft_terms") or [])
+        save_state(work_dir, state)
+
+    transcribed_path = build_transcribed_txt(work_dir, page_numbers, state=state)
     stats["pages_skipped"] = count_skipped_pages(work_dir, page_numbers)
     stats["char_count"] = len(transcribed_path.read_text(encoding="utf-8"))
     stats["human_review_pages"] = sorted(set(stats["human_review_pages"]))
+    stats["accuracy_notes"] = state.get("accuracy_notes", "")
     write_summary_report(work_dir, stats)
     from pdf_transcribe_detect import save_source_config
 
+    from pdf_transcribe_integrity import evaluate_pilot_checks
+
     save_source_config(work_dir, state, stats)
+    stats["pilot_report"] = evaluate_pilot_checks(work_dir, state, stats)
+    (work_dir / "pilot_report.json").write_text(
+        json.dumps(stats["pilot_report"], indent=2), encoding="utf-8"
+    )
     return stats

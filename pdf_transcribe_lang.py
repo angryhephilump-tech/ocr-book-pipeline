@@ -171,8 +171,10 @@ def normalize_language(value: str | None) -> str:
 
 
 def normalize_source_id(value: str | None) -> str:
-    sid = (value or DEFAULT_SOURCE_ID).strip().lower().replace(" ", "_")
-    return sid or DEFAULT_SOURCE_ID
+    """Return slug or empty string — never default to a legacy source id."""
+    if value is None or not str(value).strip():
+        return ""
+    return str(value).strip().lower().replace(" ", "_")
 
 
 def normalize_script(value: str | None = None, language: str | None = None) -> str:
@@ -211,12 +213,16 @@ def job_language_config(
 
 
 def job_language_config_from_state(state: dict) -> JobLanguageConfig:
+    from pdf_transcribe_source import ensure_source_identity
+
+    ensure_source_identity(state)
     profile = state.get("detected_source_profile") or {}
     langs = profile.get("languages") or {}
     primary = max(langs, key=langs.get) if langs else state.get("language", DEFAULT_LANGUAGE)
+    sid = state.get("source_name") or state.get("source_id") or DEFAULT_SOURCE_ID
     return job_language_config(
         primary,
-        state.get("source_id") or state.get("source_name"),
+        sid,
         state.get("script"),
         direction=state.get("direction") or profile.get("direction"),
         normalization_rules=state.get("normalization_rules")
@@ -244,39 +250,41 @@ def impossible_strings_path(source_id: str) -> Path:
 
 
 def load_hard_terms(source_id: str | None = None, state: dict | None = None) -> list[str]:
+    from pdf_transcribe_source import auto_file_matches_slug, resolve_source_slug
+
+    slug = resolve_source_slug(state, source_id)
     if state:
         if state.get("hard_terms"):
             return list(state["hard_terms"])
         auto = state.get("hard_terms_file")
-        if auto and Path(auto).is_file():
+        if auto and auto_file_matches_slug(auto, slug) and Path(auto).is_file():
             terms = _read_term_lines(Path(auto))
             if terms:
                 return terms
-    sid = normalize_source_id(source_id)
-    auto_path = CONFIG_DIR / f"hard_terms_auto_{sid}.txt"
+    if not slug:
+        return _read_term_lines(LEGACY_HARD_TERMS_FILE)
+    auto_path = CONFIG_DIR / f"hard_terms_auto_{slug}.txt"
     terms = _read_term_lines(auto_path)
     if terms:
         return terms
-    path = hard_terms_path(sid)
+    path = hard_terms_path(slug)
     terms = _read_term_lines(path)
     if terms:
         return terms
-    return _read_term_lines(LEGACY_HARD_TERMS_FILE)
+    if slug == DEFAULT_SOURCE_ID:
+        return _read_term_lines(LEGACY_HARD_TERMS_FILE)
+    return []
 
 
 def load_impossible_strings(source_id: str | None = None, state: dict | None = None) -> list[str]:
-    if state:
-        if state.get("impossible_strings"):
-            return list(state["impossible_strings"])
-        auto = state.get("impossible_strings_file")
-        if auto and Path(auto).is_file():
-            return _read_term_lines(Path(auto))
-    sid = normalize_source_id(source_id)
-    auto_path = CONFIG_DIR / f"impossible_auto_{sid}.txt"
-    terms = _read_term_lines(auto_path)
-    if terms:
-        return terms
-    return _read_term_lines(impossible_strings_path(sid))
+    """Per-source only — stored under config/sources/{slug}/impossible_strings.txt."""
+    from pdf_transcribe_integrity import load_impossible_strings_for_source
+    from pdf_transcribe_source import resolve_source_slug
+
+    slug = resolve_source_slug(state, source_id)
+    if not slug:
+        return []
+    return load_impossible_strings_for_source(slug, state)
 
 
 def list_source_ids() -> list[str]:
@@ -303,6 +311,8 @@ _SPANISH_COMMON = frozenset(
         "traducción",
         "apéndice",
         "introducción",
+        "inscripción",
+        "inscripcion",
     }
 )
 

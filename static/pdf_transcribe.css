@@ -76,8 +76,22 @@ h1 { font-size: 1.6rem; margin: 0 0 0.35rem; font-weight: 600; }
   border: 1px solid #3c4043;
 }
 .btn.ghost:disabled { opacity: 0.4; cursor: not-allowed; }
-.progress, .done { margin-top: 1.5rem; }
+.progress, .done, .pilot-report { margin-top: 1.5rem; }
 .hidden { display: none !important; }
+.config-status {
+  margin: 0.5rem 0 0; padding: 0.5rem 0.65rem; border-radius: 8px; font-size: 0.82rem;
+}
+.config-status.ok { background: #1a2e22; color: #81c995; }
+.config-status.warn { background: #2a2416; color: #fdd663; }
+.config-status.bad { background: #3a1a1a; color: #f28b82; }
+.work-dir-hint { color: #fdd663; font-size: 0.8rem; margin-top: 0.35rem; }
+.work-dir-hint.warn { color: #fdd663; }
+.lock-badge { font-size: 0.8rem; color: #fdd663; margin-left: 0.35rem; }
+.pilot-locked input:disabled + span { opacity: 0.55; }
+.pilot-checks { list-style: none; padding: 0; margin: 0.5rem 0; }
+.pilot-checks li { margin: 0.35rem 0; font-size: 0.9rem; }
+.pilot-checks li.pass { color: #81c995; }
+.pilot-checks li.fail { color: #f28b82; }
 .progress-msg { margin: 0 0 0.5rem; font-size: 0.95rem; }
 .bar {
   height: 8px; background: #3c4043; border-radius: 4px; overflow: hidden;

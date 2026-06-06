@@ -4,6 +4,16 @@ const fileName = document.getElementById("file-name");
 const form = document.getElementById("form");
 const startBtn = document.getElementById("start");
 const openFolderBtn = document.getElementById("open-folder");
+const resetSourceBtn = document.getElementById("reset-source");
+const configStatus = document.getElementById("config-status");
+const workDirInput = document.getElementById("work-dir");
+const workDirHint = document.getElementById("work-dir-hint");
+const modeFull = document.getElementById("mode-full");
+const fullLock = document.getElementById("full-lock");
+const pilotPanel = document.getElementById("pilot-panel");
+const pilotChecks = document.getElementById("pilot-checks");
+const pilotUnlockMsg = document.getElementById("pilot-unlock-msg");
+const sourceNameInput = document.getElementById("source-name");
 const progressPanel = document.getElementById("progress-panel");
 const confirmPanel = document.getElementById("confirm-panel");
 const profileLines = document.getElementById("profile-lines");
@@ -126,7 +136,106 @@ changeKeyBtn.addEventListener("click", () => {
   keyInput.focus();
 });
 
+function slugifySourceName(name) {
+  return (name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function suggestWorkDir() {
+  const src = slugifySourceName(sourceNameInput?.value || "");
+  const pdf = fileInput.files[0]?.name?.replace(/\.pdf$/i, "") || "book";
+  if (!src) return "";
+  return `_pdf_transcribe_uploads/${src}/${pdf}_output`;
+}
+
+function updateWorkDirHint() {
+  if (!workDirHint || !workDirInput) return;
+  const suggested = suggestWorkDir();
+  if (!suggested) {
+    workDirHint.classList.add("hidden");
+    return;
+  }
+  if (!workDirInput.value.trim()) {
+    workDirInput.placeholder = suggested;
+  }
+  const src = slugifySourceName(sourceNameInput?.value || "");
+  const val = workDirInput.value.trim().toLowerCase();
+  if (src && val && !val.includes(src)) {
+    workDirHint.textContent =
+      `Tip: consider naming this folder after your source (${src}) to avoid mixing runs.`;
+    workDirHint.classList.remove("hidden");
+    workDirHint.classList.add("warn");
+  } else {
+    workDirHint.classList.add("hidden");
+  }
+}
+
+async function refreshPilotGate() {
+  const src = (sourceNameInput?.value || "").trim();
+  if (!src || !modeFull) return;
+  try {
+    const res = await fetch(`/api/pilot-status?source_name=${encodeURIComponent(src)}`);
+    const data = await parseApiResponse(res);
+    const unlocked = data.full_book_unlocked;
+    modeFull.disabled = !unlocked;
+    if (fullLock) fullLock.classList.toggle("hidden", unlocked);
+    if (!unlocked && modeFull.checked) {
+      document.getElementById("mode-test").checked = true;
+    }
+  } catch (_) {
+    modeFull.disabled = true;
+  }
+}
+
+function showConfigStatus(integrity, folderWarning) {
+  if (!configStatus || !integrity) return;
+  configStatus.classList.remove("hidden", "ok", "warn", "bad");
+  if (integrity.blocking && integrity.blocking.length) {
+    configStatus.textContent = integrity.blocking.join(" ");
+    configStatus.classList.add("bad");
+    return;
+  }
+  const label = integrity.status || (integrity.ok ? "Config OK" : "Config issues found and auto-fixed");
+  const fixes = (integrity.fixes || []).join("; ");
+  configStatus.textContent = fixes ? `${label}: ${fixes}` : label;
+  configStatus.classList.add(integrity.fixes && integrity.fixes.length ? "warn" : "ok");
+  if (folderWarning) {
+    configStatus.textContent += ` — ${folderWarning}`;
+    configStatus.classList.remove("ok");
+    configStatus.classList.add("warn");
+  }
+}
+
+function renderPilotReport(report) {
+  if (!report || !pilotChecks) return;
+  pilotPanel.classList.remove("hidden");
+  pilotChecks.innerHTML = "";
+  for (const c of report.checks || []) {
+    const li = document.createElement("li");
+    li.className = c.passed ? "pass" : "fail";
+    li.textContent = `${c.passed ? "✓" : "✗"} ${c.name} — ${c.detail}`;
+    pilotChecks.appendChild(li);
+  }
+  if (pilotUnlockMsg) {
+    pilotUnlockMsg.textContent = report.full_book_unlocked
+      ? "All checks passed — full book is unlocked for this source."
+      : "Fix red items (or run Reset source) before running the full book.";
+  }
+  if (report.full_book_unlocked) refreshPilotGate();
+}
+
+sourceNameInput?.addEventListener("input", () => {
+  updateWorkDirHint();
+  refreshPilotGate();
+});
+workDirInput?.addEventListener("input", updateWorkDirHint);
+fileInput.addEventListener("change", updateWorkDirHint);
+
 loadKeyStatus();
+refreshPilotGate();
 
 function setFile(file) {
   if (!file) return;
@@ -270,9 +379,11 @@ async function pollProgress() {
       setFormLocked(false);
       startBtn.disabled = false;
       openFolderBtn.disabled = false;
+      resetSourceBtn.disabled = false;
       donePanel.classList.remove("hidden");
       outPath.textContent = workDir || "";
       progressMsg.textContent = "All done!";
+      if (data.pilot_report) renderPilotReport(data.pilot_report);
     }
     if (data.phase === "error" || data.error) {
       clearInterval(pollTimer);
@@ -319,6 +430,9 @@ async function startPrepare() {
   setFormLocked(true);
   startBtn.disabled = true;
   openFolderBtn.disabled = true;
+  resetSourceBtn.disabled = true;
+  configStatus?.classList.add("hidden");
+  pilotPanel?.classList.add("hidden");
 
   const pasted = (keyInput.value || "").trim();
   if (pasted) {
@@ -342,6 +456,8 @@ async function startPrepare() {
   }
   workDir = data.work_dir;
   openFolderBtn.disabled = false;
+  resetSourceBtn.disabled = false;
+  showConfigStatus(data.integrity, data.folder_warning);
   progressMsg.textContent = `${data.message} — working…`;
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(pollProgress, 1200);
@@ -428,4 +544,36 @@ openFolderBtn.addEventListener("click", async () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path: workDir }),
   });
+});
+
+resetSourceBtn.addEventListener("click", async () => {
+  const src = (sourceNameInput?.value || "").trim();
+  if (!src) {
+    errEl.textContent = "Enter a source name first.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  if (!workDir) {
+    errEl.textContent = "No work folder yet — upload a PDF first.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  if (!confirm(`Reset outputs for "${src}" in this folder? Config files are kept.`)) return;
+  const res = await fetch("/api/reset-source", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source_name: src, work_dir: workDir }),
+  });
+  const data = await parseApiResponse(res);
+  if (!data.ok) {
+    errEl.textContent = data.error || "Reset failed.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  errEl.classList.add("hidden");
+  configStatus.classList.remove("hidden", "bad");
+  configStatus.classList.add("ok");
+  configStatus.textContent = data.message || "Reset complete.";
+  donePanel.classList.add("hidden");
+  pilotPanel.classList.add("hidden");
 });

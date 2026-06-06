@@ -1,8 +1,13 @@
 # OCR Book Pipeline
 
-Local OCR extraction and human review for physical book photos and online PDFs.
+Local review workflow with DeepSeek OCR (via Archive Gateway) for physical book photos and PDFs.
 Built for **100% accurate final output** — nothing is auto-corrected, and any engine
 disagreement or low confidence goes to human review.
+
+## Documentation
+
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — full system map (Archive Studios, Gateway, PDF Transcribe, all modules)
+- **[docs/PDF_TRANSCRIBE_PIPELINE.md](docs/PDF_TRANSCRIBE_PIPELINE.md)** — PDF Transcribe v3 step-by-step operator guide
 
 ## Quick start
 
@@ -13,11 +18,18 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### Install Tesseract (required)
+### Start Archive Gateway (required)
 
-1. Download installer: https://github.com/UB-Mannheim/tesseract/wiki
-2. Install with **Spanish** language data
-3. Add Tesseract to PATH
+Set environment variables:
+
+- `ARCHIVE_GUMROAD_PRODUCT_ID`
+- `ARCHIVE_HF_TOKEN`
+
+Then run:
+
+```powershell
+.\scripts\run_gateway.ps1
+```
 
 ### Optional: PDF input
 
@@ -33,7 +45,7 @@ Install Poppler for Windows and add poppler bin to PATH.
 
 Original files are **never modified**.
 
-### 2. Run the pipeline (4 OCR passes per page)
+### 2. Run the pipeline (3 DeepSeek passes per page)
 
 ```powershell
 python ocr_book.py .\photos .\output
@@ -41,10 +53,9 @@ python ocr_book.py .\photos .\output
 
 | Run | Image | Engine |
 |-----|-------|--------|
-| A | Original | PaddleOCR |
-| B | Light preprocess | PaddleOCR |
-| C | Original | Tesseract |
-| D | Light preprocess | Tesseract |
+| A | Original | DeepSeek |
+| B | Original (sampling variation) | DeepSeek |
+| C | Light preprocess | DeepSeek |
 
 ### 3. Launch review UI
 

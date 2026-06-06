@@ -394,8 +394,19 @@ def _poppler_path() -> str | None:
     return None
 
 
-def work_dir_for_pdf(pdf_path: Path) -> Path:
-    return pdf_path.resolve().parent / f"{pdf_path.stem}_transcribe_output"
+def work_dir_for_pdf(
+    pdf_path: Path,
+    source_name: str | None = None,
+    *,
+    custom_work_dir: str | None = None,
+) -> Path:
+    from pdf_transcribe_integrity import work_dir_for_source
+
+    return work_dir_for_source(
+        pdf_path,
+        source_name,
+        custom_work_dir=custom_work_dir,
+    )
 
 
 def state_path(work_dir: Path) -> Path:
@@ -1105,14 +1116,27 @@ def mark_page_complete(state: dict, run: int, page_num: int) -> None:
     entry["completed"] = sorted(done)
 
 
-def assemble_run_txt(work_dir: Path, run: int, page_numbers: list[int]) -> Path:
+def assemble_run_txt(
+    work_dir: Path,
+    run: int,
+    page_numbers: list[int],
+    *,
+    source_slug: str | None = None,
+) -> Path:
+    from pdf_transcribe_integrity import read_source_lock, write_sourced_text
+
     parts: list[str] = []
     for page_num in page_numbers:
         path = page_transcript_path(work_dir, run, page_num)
         text = path.read_text(encoding="utf-8") if path.is_file() else ""
         parts.append(f"--- Page {page_num} ---\n{text}")
     out = work_dir / f"run{run}.txt"
-    out.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
+    body = "\n\n".join(parts) + "\n"
+    slug = source_slug or read_source_lock(work_dir)
+    if slug:
+        write_sourced_text(out, slug, body)
+    else:
+        out.write_text(body, encoding="utf-8")
     return out
 
 
@@ -1231,13 +1255,15 @@ def build_spot_patch_params(
     sentence: str,
     terms: list[str],
     lang_cfg,
+    *,
+    section_hint: str | None = None,
 ) -> dict:
     from pdf_transcribe_spot import build_patch_prompt
 
     return build_vision_message_params(
         image_path,
         model,
-        user_text=build_patch_prompt(sentence, terms, lang_cfg),
+        user_text=build_patch_prompt(sentence, terms, lang_cfg, section_hint=section_hint),
     )
 
 
@@ -1281,6 +1307,7 @@ def _init_transcription_job(
     work_dir: Path | None,
     language: str | None = None,
     source_id: str | None = None,
+    source_name: str | None = None,
     script: str | None = None,
     explicit_pages: list[int] | None = None,
 ) -> tuple[Path, WorkPages, WorkPageRange, dict]:
@@ -1288,8 +1315,27 @@ def _init_transcription_job(
     if not pdf_path.is_file():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
-    work_dir = work_dir or work_dir_for_pdf(pdf_path)
+    work_dir = work_dir or work_dir_for_pdf(pdf_path, source_name)
     work_dir.mkdir(parents=True, exist_ok=True)
+
+    from pdf_transcribe_integrity import run_startup_integrity
+
+    from pdf_transcribe_integrity import read_source_lock
+
+    integrity_slug = source_name or source_id or read_source_lock(work_dir) or "unknown"
+    integrity, healed_state = run_startup_integrity(work_dir, integrity_slug)
+    if integrity.blocking:
+        raise RuntimeError(integrity.blocking[0])
+    if integrity.fixes:
+        write_progress(
+            work_dir,
+            phase="config_check",
+            current_run=0,
+            page=0,
+            total_pages=0,
+            message=integrity.status_label + ": " + "; ".join(integrity.fixes),
+        )
+
     pdf_count = _pdf_page_count(pdf_path)
     page_range = resolve_work_page_range(
         pdf_count,
@@ -1311,15 +1357,21 @@ def _init_transcription_job(
         "max_pages": max_pages,
     }
     settings = load_settings()
+    from pdf_transcribe_detect import slugify_source_name
     from pdf_transcribe_lang import normalize_script
+    from pdf_transcribe_source import ensure_source_identity
 
     job_language = (language or settings.get("language") or "spanish").strip().lower()
-    job_source = (source_id or settings.get("source_id") or "ixtlilxochitl").strip().lower()
+    job_source = ""
+    if source_name:
+        job_source = slugify_source_name(source_name)
+    elif source_id:
+        job_source = source_id.strip().lower().replace(" ", "_")
     job_script = normalize_script(
         (script or settings.get("script")),
         job_language,
     )
-    state = load_state(work_dir)
+    state = healed_state if healed_state else load_state(work_dir)
     if state.get("pdf") != job_sig["pdf"] or state.get("page_numbers") != job_sig["page_numbers"]:
         state = {
             "pdf": job_sig["pdf"],
@@ -1332,8 +1384,10 @@ def _init_transcription_job(
             "pdf_page_count": pdf_count,
             "dpi": DPI,
             "language": job_language,
-            "source_id": job_source,
+            "source_id": job_source or None,
+            "source_name": job_source or None,
             "script": job_script,
+            "impossible_strings": [],
             "batch_collisions": [],
             "runs": {str(i): {"completed": []} for i in range(1, NUM_TRANSCRIPTION_RUNS + 1)},
             "reconcile": {"completed": []},
@@ -1349,8 +1403,12 @@ def _init_transcription_job(
         state["max_pages"] = max_pages
         state["pdf_page_count"] = pdf_count
         state["language"] = job_language
-        state["source_id"] = job_source
+        if job_source:
+            state["source_id"] = job_source
+            state["source_name"] = job_source
         state["script"] = job_script
+        if (state.get("source_name") or "").strip() and (state.get("source_id") or "").strip():
+            ensure_source_identity(state)
         save_state(work_dir, state)
     return work_dir, work_pages, page_range, state
 
@@ -1574,7 +1632,7 @@ def _finish_transcription(
     else:
         nums = job_page_numbers(state)
         for run in range(1, NUM_TRANSCRIPTION_RUNS + 1):
-            assemble_run_txt(work_dir, run, nums)
+            assemble_run_txt(work_dir, run, nums, source_slug=state.get("source_name"))
         generate_differences(work_dir)
     nums = job_page_numbers(state)
     report("done", NUM_TRANSCRIPTION_RUNS, nums[-1] if nums else 0, total_pages, None, "All finished!")
@@ -1598,7 +1656,7 @@ def run_transcription_realtime(
     auto_confirm: bool = False,
     skip_detection: bool = False,
 ) -> Path:
-    work_dir = (work_dir or work_dir_for_pdf(pdf_path.resolve())).resolve()
+    work_dir = (work_dir or work_dir_for_pdf(pdf_path.resolve(), source_name)).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
 
     def report(
@@ -1633,6 +1691,7 @@ def run_transcription_realtime(
         work_dir=work_dir,
         language=language,
         source_id=source_id,
+        source_name=source_name,
         script=script,
         explicit_pages=explicit_pages,
     )
@@ -1679,7 +1738,7 @@ def run_transcription_realtime(
             user_prompt = transcription_user_prompt(work_dir, state)
         done = completed_pages_for_run(state, run)
         if len(done) >= total_pages and not (work_dir / f"run{run}.txt").is_file():
-            assemble_run_txt(work_dir, run, page_nums)
+            assemble_run_txt(work_dir, run, page_nums, source_slug=state.get("source_name"))
         for page_num, image_path in work_pages:
             if page_num in done:
                 continue
@@ -1740,7 +1799,7 @@ def run_transcription_batch(
 ) -> Path:
     settings = load_settings()
     model = settings["model"]
-    work_dir = (work_dir or work_dir_for_pdf(pdf_path.resolve())).resolve()
+    work_dir = (work_dir or work_dir_for_pdf(pdf_path.resolve(), source_name)).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     batch_done = 0
     batch_total = 0
@@ -1777,6 +1836,7 @@ def run_transcription_batch(
         work_dir=work_dir,
         language=language,
         source_id=source_id,
+        source_name=source_name,
         script=script,
         explicit_pages=explicit_pages,
     )
@@ -2081,6 +2141,11 @@ def main(argv: list[str] | None = None) -> int:
         choices=sorted({"latin", "arabic", "korean", "japanese", "chinese"}),
         help="Expected output script for sanity checks (default: from language)",
     )
+    parser.add_argument(
+        "--reset-source",
+        action="store_true",
+        help="Clear work-dir outputs for this source (keeps config); then exit",
+    )
     args = parser.parse_args(argv)
     try:
         api_key = resolve_api_key(args.api_key)
@@ -2114,13 +2179,24 @@ def main(argv: list[str] | None = None) -> int:
 
     explicit_pages = parse_page_list(args.pages) if args.pages else None
     from pdf_transcribe_detect import slugify_source_name
+    from pdf_transcribe_integrity import reset_source_work_dir
 
     source_name = args.source_name or slugify_source_name(args.pdf.stem)
+    out_dir = args.output_dir or work_dir_for_pdf(args.pdf.resolve(), source_name)
+    if args.reset_source:
+        deleted = reset_source_work_dir(out_dir, source_name)
+        print(f"Reset {source_name} in {out_dir}")
+        for item in deleted:
+            print(f"  deleted: {item}")
+        if not deleted:
+            print("  (nothing to delete)")
+        return 0
+
     work_dir = run_transcription(
         args.pdf,
         api_key,
         max_pages=None if explicit_pages else args.max_pages,
-        work_dir=args.output_dir,
+        work_dir=args.output_dir or out_dir,
         on_progress=cli_progress,
         skip_front_pages=max(0, args.skip_front_pages),
         processing_mode=args.processing,

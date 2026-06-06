@@ -76,10 +76,10 @@
 
         <legend>How many pages?</legend>
 
-        <label><input type="radio" name="mode" value="test" checked> Test <strong>10 pages</strong> after skip (recommended)</label>
-        <p class="hint">Example: skip 12 + test 10 → transcribes PDF pages 13–22. Pilot: body text, Nahuatl names, footnotes, one faded page.</p>
+        <label><input type="radio" name="mode" value="test" id="mode-test" checked> <span id="pilot-label">Run pilot (10 pages)</span> after skip (recommended)</label>
+        <p class="hint">Complete a passing 10-page pilot before full book unlocks. Example: skip 12 + pilot 10 → PDF pages 13–22.</p>
 
-        <label><input type="radio" name="mode" value="full"> Full book (all pages)</label>
+        <label class="pilot-locked"><input type="radio" name="mode" value="full" id="mode-full" disabled> <span id="full-label">Full book (all pages)</span> <span class="lock-badge hidden" id="full-lock">🔒 pilot required</span></label>
         <label class="remember skip-front">
           Skip first
           <input type="number" name="skip_front_pages" id="skip-front-pages" value="2" min="0" max="30" title="Google Books notice pages at the start">
@@ -102,9 +102,15 @@
         <legend>Source</legend>
         <label class="field">
           <span>Source name</span>
-          <input type="text" name="source_name" id="source-name" placeholder="e.g. kaqchikel_chronicles" required>
-          <small>Used for auto-detected profile and <code>config/sources/&lt;name&gt;.json</code>. Re-runs skip detection if saved.</small>
+          <input type="text" name="source_name" id="source-name" placeholder="e.g. anales_de_tlatelolco" required>
+          <small>Owns config under <code>config/sources/&lt;name&gt;/</code>. Re-runs skip detection if saved.</small>
         </label>
+        <label class="field">
+          <span>Output folder (optional)</span>
+          <input type="text" name="work_dir" id="work-dir" placeholder="Auto: uploads/&lt;source&gt;/&lt;pdf&gt;_output">
+          <small id="work-dir-hint" class="work-dir-hint hidden"></small>
+        </label>
+        <p class="config-status hidden" id="config-status" aria-live="polite"></p>
         <p class="hint optional-label">Optional overrides (pre-filled after auto-detection):</p>
         <label class="field inline">
           <span>Language</span>
@@ -143,6 +149,7 @@
 
         <button type="submit" class="btn primary" id="start">Run — auto-detect &amp; transcribe</button>
 
+        <button type="button" class="btn ghost" id="reset-source" disabled>Reset source</button>
         <button type="button" class="btn ghost" id="open-folder" disabled>Open results folder</button>
 
       </div>
@@ -200,6 +207,12 @@
 
 
 
+    <section class="pilot-report hidden" id="pilot-panel" aria-live="polite">
+      <h2>Pilot checklist</h2>
+      <ul class="pilot-checks" id="pilot-checks"></ul>
+      <p class="hint" id="pilot-unlock-msg"></p>
+    </section>
+
     <section class="done hidden" id="done-panel">
 
       <h2>Finished</h2>
@@ -222,7 +235,7 @@
 
   </main>
 
-  <script src="/static/pdf_transcribe.js?v=8"></script>
+  <script src="/static/pdf_transcribe.js?v=9"></script>
 
 </body>
 
