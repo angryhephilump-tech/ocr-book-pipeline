@@ -174,6 +174,8 @@ def collect_spot_patch_requests(
     page_numbers: list[int],
     state: dict,
     lang_cfg,
+    *,
+    document_text: str | None = None,
 ) -> list[SpotPatchRequest]:
     done = completed_special_pages(state, "spot_check")
     requests: list[SpotPatchRequest] = []
@@ -183,13 +185,18 @@ def collect_spot_patch_requests(
         base = base_page_body(work_dir, page_num)
         if is_skip_body(base):
             continue
-        terms = effective_hard_terms(base, lang_cfg, state)
-        if not page_has_hard_term(base, terms):
+        terms = effective_hard_terms(
+            base, lang_cfg, state, document_text=document_text
+        )
+        hint = page_section_hint(state, page_num)
+        if not page_has_hard_term(base, terms, lang_cfg, section_hint=hint):
             continue
         image_path = work_dir / "images" / f"page_{page_num:04d}.png"
         if not image_path.is_file():
             continue
-        ops = spot_patch_operations_for_page(base, lang_cfg, state)
+        ops = spot_patch_operations_for_page(
+            base, lang_cfg, state, document_text=document_text
+        )
         for op in ops:
             requests.append(
                 SpotPatchRequest(page_num=page_num, image_path=image_path, operation=op)
@@ -238,9 +245,16 @@ def _save_spot_patched_page(
     responses: list[str],
     lang_cfg,
     impossible: list[str],
+    *,
+    section_hint: str | None = None,
 ) -> tuple[int, int, bool]:
     patched, applied, rejected, log_entries = apply_all_patches(
-        base, operations, responses, lang_cfg, impossible
+        base,
+        operations,
+        responses,
+        lang_cfg,
+        impossible,
+        section_hint=section_hint,
     )
     _append_spot_patch_log(work_dir, page_num, log_entries)
     needs_review = any(e.get("needs_human_review") for e in log_entries)
@@ -271,6 +285,7 @@ def build_transcribed_txt(
     *,
     state: dict | None = None,
 ) -> Path:
+    from pdf_transcribe_assembly import apply_cross_page_bracket_rejoins
     from pdf_transcribe_integrity import (
         read_source_lock,
         verify_run_file_headers,
@@ -283,7 +298,9 @@ def build_transcribed_txt(
             "Cannot assemble transcribed.txt — run file source headers do not match: "
             + "; ".join(mismatches)
         )
-    parts = [format_page_block(n, final_page_body(work_dir, n)) for n in page_numbers]
+    page_bodies = {n: final_page_body(work_dir, n) for n in page_numbers}
+    page_bodies = apply_cross_page_bracket_rejoins(page_bodies, page_numbers)
+    parts = [format_page_block(n, page_bodies[n]) for n in page_numbers]
     path = work_dir / "transcribed.txt"
     body = "\n\n".join(parts) + "\n"
     slug = (state or {}).get("source_name") or (state or {}).get("source_id") or read_source_lock(work_dir)
@@ -339,10 +356,52 @@ def _run_batch_custom(
     api_key: str,
     model: str,
     requests_payload: list[dict],
+    *,
+    report: Callable | None = None,
+    phase: str = "batch",
+    total_pages: int = 0,
+    label: str = "Batch",
 ) -> list[dict]:
     lines_out: list[dict] = []
-    for i in range(0, len(requests_payload), BATCH_MAX_REQUESTS):
-        chunk = requests_payload[i : i + BATCH_MAX_REQUESTS]
+    chunks = [
+        requests_payload[i : i + BATCH_MAX_REQUESTS]
+        for i in range(0, len(requests_payload), BATCH_MAX_REQUESTS)
+    ]
+    total_chunks = len(chunks)
+    total_requests = len(requests_payload)
+    for chunk_idx, chunk in enumerate(chunks):
+        if report:
+            report(
+                phase,
+                0,
+                0,
+                total_pages,
+                None,
+                f"{label}: submitted chunk {chunk_idx + 1}/{total_chunks} ({len(chunk)} requests)…",
+                step_done=chunk_idx,
+                step_total=total_chunks,
+                batch_done=chunk_idx * BATCH_MAX_REQUESTS,
+                batch_total=total_requests,
+            )
+
+        def on_batch_status(info: dict, _idx=chunk_idx) -> None:
+            if not report:
+                return
+            counts = info.get("request_counts") or {}
+            succeeded = int(counts.get("succeeded") or 0)
+            report(
+                phase,
+                0,
+                0,
+                total_pages,
+                None,
+                f"{label}: chunk {chunk_idx + 1}/{total_chunks} — {succeeded}/{len(chunk)} done…",
+                step_done=_idx,
+                step_total=total_chunks,
+                batch_done=_idx * BATCH_MAX_REQUESTS + succeeded,
+                batch_total=total_requests,
+            )
+
         resp = anthropic_request(
             "POST",
             ANTHROPIC_BATCH_URL,
@@ -356,8 +415,21 @@ def _run_batch_custom(
         batch_id = resp.json().get("id")
         if not batch_id:
             raise RuntimeError("No batch id returned.")
-        info = wait_for_batch(api_key, batch_id)
+        info = wait_for_batch(api_key, batch_id, on_status=on_batch_status)
         lines_out.extend(iter_batch_results(api_key, batch_id, info))
+        if report:
+            report(
+                phase,
+                0,
+                0,
+                total_pages,
+                None,
+                f"{label}: finished chunk {chunk_idx + 1}/{total_chunks}",
+                step_done=chunk_idx + 1,
+                step_total=total_chunks,
+                batch_done=min((chunk_idx + 1) * BATCH_MAX_REQUESTS, total_requests),
+                batch_total=total_requests,
+            )
     return lines_out
 
 
@@ -418,9 +490,22 @@ def finalize_pipeline(
         tag_page_sections_from_run1(work_dir, state)
         save_state(work_dir, state)
 
+    document_text = "\n\n".join(
+        base_page_body(work_dir, n) for n in page_numbers if not is_skip_body(base_page_body(work_dir, n))
+    )
+
     reconcile_items = pages_needing_reconcile(work_dir, page_numbers)
     if reconcile_items and report:
-        report("reconcile", 0, 0, total_pages, None, f"Reconciling {len(reconcile_items)} pages…")
+        report(
+            "reconcile",
+            0,
+            0,
+            total_pages,
+            None,
+            f"Reconciling {len(reconcile_items)} pages…",
+            step_done=0,
+            step_total=len(reconcile_items),
+        )
 
     if reconcile_items:
         if use_batch:
@@ -433,7 +518,15 @@ def finalize_pipeline(
                 }
                 for item in reconcile_items
             ]
-            for line in _run_batch_custom(api_key, model, payload):
+            for line in _run_batch_custom(
+                api_key,
+                model,
+                payload,
+                report=report,
+                phase="reconcile",
+                total_pages=total_pages,
+                label="Reconcile",
+            ):
                 cid, text, _ = parse_batch_result_line(line)
                 if not cid or text is None:
                     continue
@@ -496,8 +589,13 @@ def finalize_pipeline(
     write_reconcile_log(work_dir, log_entries)
 
     if spot_check_enabled:
-        patch_requests = collect_spot_patch_requests(work_dir, page_numbers, state, lang_cfg)
+        patch_requests = collect_spot_patch_requests(
+            work_dir, page_numbers, state, lang_cfg, document_text=document_text
+        )
         pages_with_spot = sorted({r.page_num for r in patch_requests})
+        spot_chunks = max(
+            1, (len(patch_requests) + BATCH_MAX_REQUESTS - 1) // BATCH_MAX_REQUESTS
+        )
         if patch_requests and report:
             report(
                 "spot_check",
@@ -506,6 +604,10 @@ def finalize_pipeline(
                 total_pages,
                 None,
                 f"Spot patches: {len(patch_requests)} sentences on {len(pages_with_spot)} pages…",
+                step_done=0,
+                step_total=spot_chunks,
+                batch_done=0,
+                batch_total=len(patch_requests),
             )
         if patch_requests:
             if use_batch:
@@ -526,7 +628,15 @@ def finalize_pipeline(
                     for req in patch_requests
                 ]
                 results_by_page: dict[int, list[tuple[int, str]]] = {}
-                for line in _run_batch_custom(api_key, model, payload):
+                for line in _run_batch_custom(
+                    api_key,
+                    model,
+                    payload,
+                    report=report,
+                    phase="spot_check",
+                    total_pages=total_pages,
+                    label="Spot patch",
+                ):
                     cid, text, _ = parse_batch_result_line(line)
                     if not cid or text is None:
                         continue
@@ -541,13 +651,23 @@ def finalize_pipeline(
                     )
                 for page_num in pages_with_spot:
                     base = base_page_body(work_dir, page_num)
-                    ops = spot_patch_operations_for_page(base, lang_cfg, state)
+                    ops = spot_patch_operations_for_page(
+                        base, lang_cfg, state, document_text=document_text
+                    )
                     page_results = sorted(results_by_page.get(page_num, []))
                     responses = [t for _, t in page_results]
                     if len(responses) < len(ops):
                         responses.extend([""] * (len(ops) - len(responses)))
+                    hint = page_section_hint(state, page_num)
                     applied, rejected, needs_review = _save_spot_patched_page(
-                        work_dir, page_num, base, ops, responses, lang_cfg, impossible
+                        work_dir,
+                        page_num,
+                        base,
+                        ops,
+                        responses,
+                        lang_cfg,
+                        impossible,
+                        section_hint=hint,
                     )
                     mark_special_page_complete(state, "spot_check", page_num)
                     stats["pages_spot_checked"] += 1
@@ -591,8 +711,16 @@ def finalize_pipeline(
                             responses.append(req.operation.sentence)
                         time.sleep(API_DELAY_SEC)
                     ops = [r.operation for r in reqs]
+                    hint = page_section_hint(state, page_num)
                     applied, rejected, needs_review = _save_spot_patched_page(
-                        work_dir, page_num, base, ops, responses, lang_cfg, impossible
+                        work_dir,
+                        page_num,
+                        base,
+                        ops,
+                        responses,
+                        lang_cfg,
+                        impossible,
+                        section_hint=hint,
                     )
                     mark_special_page_complete(state, "spot_check", page_num)
                     stats["pages_spot_checked"] += 1
@@ -610,10 +738,15 @@ def finalize_pipeline(
             base = base_page_body(work_dir, page_num)
             if is_skip_body(base):
                 continue
-            terms = effective_hard_terms(base, lang_cfg, state)
-            if not page_has_hard_term(base, terms):
+            hint = page_section_hint(state, page_num)
+            terms = effective_hard_terms(
+                base, lang_cfg, state, document_text=document_text
+            )
+            if not page_has_hard_term(base, terms, lang_cfg, section_hint=hint):
                 continue
-            ops = spot_patch_operations_for_page(base, lang_cfg, state)
+            ops = spot_patch_operations_for_page(
+                base, lang_cfg, state, document_text=document_text
+            )
             if not ops:
                 stats["spot_expected_no_patch"].append(page_num)
                 stats["human_review_pages"].append(page_num)
@@ -631,6 +764,26 @@ def finalize_pipeline(
         if promoted:
             log_soft_term_promotions(work_dir, slug, before, state.get("soft_terms") or [])
         save_state(work_dir, state)
+
+    from pdf_transcribe_assembly import page_needs_bracket_boundary_review
+
+    page_bodies_for_review = {n: final_page_body(work_dir, n) for n in page_numbers}
+    for idx, page_num in enumerate(page_numbers):
+        body = page_bodies_for_review.get(page_num, "")
+        if is_skip_body(body):
+            continue
+        prev_body = (
+            page_bodies_for_review.get(page_numbers[idx - 1]) if idx > 0 else None
+        )
+        next_body = (
+            page_bodies_for_review.get(page_numbers[idx + 1])
+            if idx + 1 < len(page_numbers)
+            else None
+        )
+        if page_needs_bracket_boundary_review(
+            body, prev_body=prev_body, next_body=next_body
+        ):
+            stats["human_review_pages"].append(page_num)
 
     transcribed_path = build_transcribed_txt(work_dir, page_numbers, state=state)
     stats["pages_skipped"] = count_skipped_pages(work_dir, page_numbers)

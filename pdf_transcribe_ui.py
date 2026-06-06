@@ -214,6 +214,10 @@ def create_app() -> Flask:
                         page=page,
                         total_pages=total,
                         message=msg,
+                        step_done=_extra.get("step_done"),
+                        step_total=_extra.get("step_total"),
+                        batch_done=_extra.get("batch_done"),
+                        batch_total=_extra.get("batch_total"),
                     )
 
                 report("rendering", 0, 0, 0, None, "Converting PDF pages to images…")

@@ -9,9 +9,13 @@ from pdf_transcribe_lang import (
     JobLanguageConfig,
     strip_for_term_match,
     strip_whitespace_for_compare,
+    term_present_in_text,
 )
 
 REJECT_MISSING_HARD_TERM = "missing_hard_term"
+REJECT_IMPOSSIBLE_SIC = "impossible_string"
+
+_SIC_RE = re.compile(r"\[sic\]", re.IGNORECASE)
 
 FOOTNOTE_SEP = "--- FOOTNOTES ---"
 _SUPERSCRIPT_CHARS = "¹²³⁴⁵⁶⁷⁸⁹⁰"
@@ -93,6 +97,8 @@ def build_patch_prompt(
         f"— {lang_cfg.normalization_rule}\n"
         "— Do not correct what appears to be a printing error — if the image shows it, "
         "transcribe it exactly and add [sic] immediately after\n"
+        "— Never add [sic] to words flagged as impossible OCR corruptions — leave those "
+        "unchanged for human review\n"
         "— If a footnote is numbered 8 in the image transcribe 8 even if the in-text superscript is ³\n"
         "— Preserve all emphasis markers exactly as they appear in the original sentence\n"
         "— If you cannot locate this sentence in the image or cannot read it clearly "
@@ -371,12 +377,24 @@ def sentence_contains_hard_terms(
     sentence: str,
     terms: tuple[str, ...],
     lang_cfg: JobLanguageConfig,
+    *,
+    section_hint: str | None = None,
 ) -> bool:
     """True if every term that triggered the patch still appears in the sentence."""
     if not terms:
         return True
-    matched = _terms_in_sentence(sentence, list(terms), lang_cfg)
-    return len(matched) == len(terms)
+    return all(
+        term_present_in_text(t, sentence, lang_cfg, section_hint=section_hint) for t in terms
+    )
+
+
+def _patch_added_sic(original: str, candidate: str) -> bool:
+    return len(_SIC_RE.findall(candidate)) > len(_SIC_RE.findall(original))
+
+
+def _sentence_has_impossible_token(sentence: str, impossible_strings: list[str]) -> bool:
+    lower = sentence.lower()
+    return any(bad and bad.lower() in lower for bad in impossible_strings)
 
 
 def validate_patch_response(
@@ -385,6 +403,8 @@ def validate_patch_response(
     lang_cfg: JobLanguageConfig,
     impossible_strings: list[str],
     expected_terms: tuple[str, ...] = (),
+    *,
+    section_hint: str | None = None,
 ) -> tuple[str, str | None]:
     """Return (sentence to use, reject_reason). reject_reason set when patch is rejected."""
     candidate = returned.strip()
@@ -397,6 +417,13 @@ def validate_patch_response(
         if bad and bad.lower() in candidate.lower():
             return original_sentence, "impossible_string"
 
+    if impossible_strings and _patch_added_sic(original_sentence, candidate):
+        if _sentence_has_impossible_token(original_sentence, impossible_strings):
+            return original_sentence, REJECT_IMPOSSIBLE_SIC
+        for bad in impossible_strings:
+            if bad and bad.lower() in candidate.lower():
+                return original_sentence, REJECT_IMPOSSIBLE_SIC
+
     orig_markers = _emphasis_markers(original_sentence, lang_cfg)
     new_markers = _emphasis_markers(candidate, lang_cfg)
     if orig_markers != new_markers:
@@ -405,7 +432,9 @@ def validate_patch_response(
     if strip_whitespace_for_compare(candidate) == strip_whitespace_for_compare(original_sentence):
         return original_sentence, "unchanged"
 
-    if expected_terms and not sentence_contains_hard_terms(candidate, expected_terms, lang_cfg):
+    if expected_terms and not sentence_contains_hard_terms(
+        candidate, expected_terms, lang_cfg, section_hint=section_hint
+    ):
         return original_sentence, REJECT_MISSING_HARD_TERM
 
     return candidate, None
@@ -436,6 +465,8 @@ def apply_all_patches(
     responses: list[str],
     lang_cfg: JobLanguageConfig,
     impossible_strings: list[str],
+    *,
+    section_hint: str | None = None,
 ) -> tuple[str, int, int, list[dict]]:
     """Return (patched_text, applied_count, rejected_count, per-op log entries)."""
     pairs: list[tuple[PatchOperation, str]] = []
@@ -449,13 +480,19 @@ def apply_all_patches(
             lang_cfg,
             impossible_strings,
             expected_terms=op.terms,
+            section_hint=section_hint,
         )
+        needs_review = reason in (
+            REJECT_MISSING_HARD_TERM,
+            REJECT_IMPOSSIBLE_SIC,
+            "impossible_string",
+        ) or _sentence_has_impossible_token(op.sentence, impossible_strings)
         entry = {
             "op_index": op.op_index,
             "section": op.section,
             "terms": list(op.terms),
             "reject_reason": reason,
-            "needs_human_review": reason == REJECT_MISSING_HARD_TERM,
+            "needs_human_review": needs_review,
         }
         if reason:
             rejected += 1

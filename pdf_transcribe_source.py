@@ -17,7 +17,7 @@ SOURCE_ACCURACY_NOTES: dict[str, str] = {
         "Intentional spelling variation: Nahuatl paleographic pages use colonial forms "
         "(e.g. Moquiuix without accent); Spanish translation pages use modern forms "
         "(e.g. Moquíhuix). Do not standardize across sections. "
-        "Confirmed both-runs-wrong: unoaconejaron → aconsejaron (line-break merge error)."
+        "unoaconejaron is source-accurate in Tena's edition (not an OCR error)."
     ),
 }
 
@@ -337,13 +337,17 @@ def patch_terms_for_page(
     base: str,
     lang_cfg,
     state: dict,
+    *,
+    document_text: str | None = None,
 ) -> list[str]:
     """Hard terms minus soft terms (stable names that skip spot-patch API)."""
     from pdf_transcribe_lang import effective_hard_terms
 
     slug = resolve_source_slug(state)
     soft = load_soft_terms(slug, state)
-    terms = effective_hard_terms(base, lang_cfg, state)
+    terms = effective_hard_terms(
+        base, lang_cfg, state, document_text=document_text
+    )
     return [t for t in terms if t.lower() not in soft]
 
 
@@ -351,10 +355,14 @@ def spot_patch_operations_for_page(
     base: str,
     lang_cfg,
     state: dict,
+    *,
+    document_text: str | None = None,
 ) -> list:
     from pdf_transcribe_spot import cap_patch_operations, collect_patch_operations
 
-    patch_terms = patch_terms_for_page(base, lang_cfg, state)
+    patch_terms = patch_terms_for_page(
+        base, lang_cfg, state, document_text=document_text
+    )
     ops = collect_patch_operations(base, patch_terms, lang_cfg)
     return cap_patch_operations(ops, MAX_PATCHES_PER_PAGE)
 

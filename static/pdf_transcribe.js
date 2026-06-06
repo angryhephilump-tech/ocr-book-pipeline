@@ -334,12 +334,40 @@ function formatEta(sec) {
   return m > 0 ? `~${m}m ${s}s left` : `~${s}s left`;
 }
 
+function phaseStepLabel(phase) {
+  const labels = {
+    reconcile: "Reconcile",
+    spot_check: "Spot patches",
+    finalize: "Finalize",
+    batch_waiting: "Batch",
+    batch_submitting: "Batch",
+  };
+  return labels[phase] || "Progress";
+}
+
 function updateBar(data) {
   if (data.phase === "done") {
     barFill.style.width = "100%";
     return;
   }
-  if (data.batch_total > 0) {
+  if (data.step_total > 0) {
+    const done = data.step_done || 0;
+    const pct = (done / data.step_total) * 100;
+    barFill.style.width = `${Math.min(100, Math.max(2, pct))}%`;
+    return;
+  }
+  if (
+    data.batch_total > 0 &&
+    data.phase !== "reconcile" &&
+    data.phase !== "spot_check" &&
+    data.phase !== "finalize"
+  ) {
+    const done = data.batch_done || 0;
+    const pct = (done / data.batch_total) * 100;
+    barFill.style.width = `${Math.min(100, Math.max(2, pct))}%`;
+    return;
+  }
+  if (data.batch_total > 0 && (data.phase === "spot_check" || data.phase === "reconcile")) {
     const done = data.batch_done || 0;
     const pct = (done / data.batch_total) * 100;
     barFill.style.width = `${Math.min(100, Math.max(2, pct))}%`;
@@ -415,11 +443,30 @@ async function pollProgress() {
     progressMsg.textContent = data.message || data.phase || "Working…";
     const detail = [];
     if (data.processing_mode) detail.push(data.processing_mode);
-    if (data.batch_total > 0) {
-      detail.push(`Batch ${data.batch_done || 0} / ${data.batch_total} pages`);
+    if (data.step_total > 0) {
+      detail.push(
+        `${phaseStepLabel(data.phase)}: ${data.step_done || 0} / ${data.step_total}`
+      );
+    } else if (data.batch_total > 0) {
+      const unit =
+        data.phase === "spot_check"
+          ? "requests"
+          : data.phase === "reconcile"
+            ? "pages"
+            : "pages";
+      detail.push(`Batch ${data.batch_done || 0} / ${data.batch_total} ${unit}`);
     } else {
       if (data.current_run) detail.push(`Pass ${data.current_run} of 2`);
       if (data.page && data.total_pages) detail.push(`Page ${data.page} / ${data.total_pages}`);
+    }
+    if (data.updated_at) {
+      const ageSec = Math.max(0, Math.floor((Date.now() - Date.parse(data.updated_at)) / 1000));
+      if (ageSec >= 30) {
+        const ageMin = Math.floor(ageSec / 60);
+        detail.push(
+          ageMin > 0 ? `updated ${ageMin}m ago` : `updated ${ageSec}s ago`
+        );
+      }
     }
     const eta = formatEta(data.eta_seconds);
     if (eta) detail.push(eta);

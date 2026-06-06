@@ -17,12 +17,20 @@ from pdf_transcribe_detect import (  # noqa: E402
     pick_detection_sample_pages,
     slugify_source_name,
 )
+from pdf_transcribe_assembly import (  # noqa: E402
+    apply_cross_page_bracket_rejoins,
+    has_rejoinable_bracket_split,
+    page_needs_bracket_boundary_review,
+    rejoin_bracket_fragment_pair,
+)
 from pdf_transcribe_lang import (  # noqa: E402
     build_normalization_rules_text,
+    filter_terms_by_min_occurrences,
     job_language_config,
     load_impossible_strings,
     pages_need_content_reconcile,
     strip_whitespace_for_compare,
+    term_present_in_text,
 )
 from pdf_transcribe_sanity import (  # noqa: E402
     check_page_sanity,
@@ -35,11 +43,13 @@ from pdf_transcribe_source import (  # noqa: E402
     ensure_source_identity,
 )
 from pdf_transcribe_spot import (  # noqa: E402
+    REJECT_IMPOSSIBLE_SIC,
     REJECT_MISSING_HARD_TERM,
     apply_all_patches,
     bracket_terms_in_sentence,
     cap_patch_operations,
     collect_patch_operations,
+    sentence_contains_hard_terms,
     validate_patch_response,
 )
 
@@ -212,7 +222,76 @@ def test_impossible_strings_per_source() -> None:
         "impossible_strings": [],
     }
     imp = load_impossible_strings(state=state)
-    assert "unoaconejaron" in [s.lower() for s in imp]
+    assert "unoaconejaron" not in [s.lower() for s in imp]
+
+
+def test_impossible_string_rejects_sic_patch() -> None:
+    cfg = job_language_config("spanish", "anales_de_tlatelolco")
+    original = "Ellos unoaconejaron al rey."
+    patched = "Ellos unoaconejaron[sic] al rey."
+    chosen, reason = validate_patch_response(
+        original,
+        patched,
+        cfg,
+        ["unoaconejaron"],
+        expected_terms=("unoaconejaron",),
+    )
+    assert chosen == original
+    assert reason == REJECT_IMPOSSIBLE_SIC
+
+
+def test_bracket_match_back_fuzzy_nahuatl() -> None:
+    cfg = job_language_config("nahuatl", "anales_de_tlatelolco")
+    sentence = "Reinó Quauhtlatoatzin en la ciudad."
+    assert sentence_contains_hard_terms(
+        sentence,
+        ("Cuauhtlatoatzin",),
+        cfg,
+        section_hint="paleographic_nahuatl",
+    )
+
+
+def test_bracket_strip_match_back() -> None:
+    cfg = job_language_config("spanish", "anales_de_tlatelolco")
+    sentence = "Gobernó [Ahuitzotzin] muchos años."
+    assert term_present_in_text("Ahuitzotzin", sentence, cfg)
+
+
+def test_single_occurrence_auto_term_filtered() -> None:
+    cfg = job_language_config("nahuatl", "anales_de_tlatelolco")
+    doc = "Una sola Rarelongword aquí y nada más."
+    filtered = filter_terms_by_min_occurrences(["Rarelongword"], doc, min_count=2)
+    assert filtered == []
+    doc2 = doc + "\nOtra Rarelongword aparece."
+    filtered2 = filter_terms_by_min_occurrences(["Rarelongword"], doc2, min_count=2)
+    assert filtered2 == ["Rarelongword"]
+
+
+def test_bracket_rejoin_across_pages() -> None:
+    p11 = "Texto previo [de edifi-"
+    p13 = "car] continúa aquí."
+    assert has_rejoinable_bracket_split(p11, p13)
+    merged = rejoin_bracket_fragment_pair(p11, p13)
+    assert merged is not None
+    end, start = merged
+    assert end.endswith("[de edificar]")
+    assert "contin" in start
+    bodies = apply_cross_page_bracket_rejoins({11: p11, 13: p13}, [11, 13])
+    assert bodies[11].endswith("[de edificar]")
+    assert "car]" not in bodies[13]
+    assert "aqu" in bodies[13]
+
+
+def test_cross_page_bracket_split_not_flagged() -> None:
+    p11 = "Algo [de edifi-"
+    p13 = "car] más texto"
+    assert not page_needs_bracket_boundary_review(p13, prev_body=p11)
+    assert not page_needs_bracket_boundary_review(p11, next_body=p13)
+
+
+def test_true_orphan_bracket_flagged() -> None:
+    assert page_needs_bracket_boundary_review("car] sin apertura")
+    assert page_needs_bracket_boundary_review("termina con [abierto")
 
 
 def test_patch_cap() -> None:
@@ -421,6 +500,13 @@ def main() -> int:
         test_latin_script_forces_ltr,
         test_source_identity_mismatch_raises,
         test_impossible_strings_per_source,
+        test_impossible_string_rejects_sic_patch,
+        test_bracket_match_back_fuzzy_nahuatl,
+        test_bracket_strip_match_back,
+        test_single_occurrence_auto_term_filtered,
+        test_bracket_rejoin_across_pages,
+        test_cross_page_bracket_split_not_flagged,
+        test_true_orphan_bracket_flagged,
         test_patch_cap,
         test_classify_page_section,
         test_classify_anales_pilot_page_pattern,

@@ -509,7 +509,14 @@ def run_post_run1_term_pipeline(api_key: str, work_dir: Path, state: dict) -> No
     seed = list(state.get("seed_hard_terms") or [])
     profile = state.get("detected_source_profile") or {}
     seed.extend(profile.get("seed_hard_terms") or [])
+    from pdf_transcribe_lang import filter_terms_by_min_occurrences, job_language_config_from_state
+
     extracted = extract_hard_terms_from_run1_text(api_key, run1_text)
+    lang_cfg = job_language_config_from_state(state)
+    seed_keys = {s.lower() for s in seed}
+    extracted = filter_terms_by_min_occurrences(
+        extracted, run1_text, min_count=2, always_keep=seed_keys
+    )
     merged = merge_hard_terms(seed, extracted)
     hard_path = hard_terms_auto_path(slug)
     write_hard_terms_file(

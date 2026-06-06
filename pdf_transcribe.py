@@ -441,6 +441,8 @@ def write_progress(
     processing_mode: str | None = None,
     batch_done: int | None = None,
     batch_total: int | None = None,
+    step_done: int | None = None,
+    step_total: int | None = None,
 ) -> None:
     payload = {
         "phase": phase,
@@ -452,6 +454,8 @@ def write_progress(
         "processing_mode": processing_mode,
         "batch_done": batch_done,
         "batch_total": batch_total,
+        "step_done": step_done,
+        "step_total": step_total,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -1679,6 +1683,8 @@ def run_transcription_realtime(
             processing_mode=processing_mode,
             batch_done=extra.get("batch_done"),
             batch_total=extra.get("batch_total"),
+            step_done=extra.get("step_done"),
+            step_total=extra.get("step_total"),
         )
         if on_progress:
             on_progress(phase, run, page, total, eta)
@@ -1824,6 +1830,8 @@ def run_transcription_batch(
             processing_mode=processing_mode,
             batch_done=extra.get("batch_done", batch_done),
             batch_total=extra.get("batch_total", batch_total),
+            step_done=extra.get("step_done"),
+            step_total=extra.get("step_total"),
         )
         if on_progress:
             on_progress(phase, run, page, total, eta)

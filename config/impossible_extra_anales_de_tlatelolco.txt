@@ -1,2 +1,2 @@
-# Confirmed both-runs-wrong (line-break merge). Correct form: aconsejaron
-unoaconejaron
+# Per-source impossible-string extras (one term per line, # comments allowed)
+# unoaconejaron removed — source-accurate in Tena edition (pages 11, 27)

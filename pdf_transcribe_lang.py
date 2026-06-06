@@ -327,6 +327,7 @@ def auto_hard_term_candidates(text: str, lang_cfg: JobLanguageConfig) -> list[st
     for tok in tokens:
         core = re.sub(r"^[*_]+|[*_]+$", "", tok)
         core = re.sub(r"[" + _SUPERSCRIPT_CHARS + r"]+$", "", core)
+        core = re.sub(r"[\[\]]+", "", core)
         if len(core) < 12 or " " in core:
             continue
         if core.lower() in common:
@@ -337,11 +338,88 @@ def auto_hard_term_candidates(text: str, lang_cfg: JobLanguageConfig) -> list[st
     return sorted(set(out))
 
 
+def term_occurrence_count(term: str, document_text: str) -> int:
+    """Count case-insensitive occurrences of term in document (brackets ignored)."""
+    if not term or not document_text:
+        return 0
+    view = re.sub(r"[\[\]]", "", strip_for_term_match(document_text))
+    pattern = re.compile(re.escape(term), re.IGNORECASE)
+    return len(pattern.findall(view))
+
+
+def filter_terms_by_min_occurrences(
+    terms: list[str],
+    document_text: str,
+    *,
+    min_count: int = 2,
+    always_keep: set[str] | None = None,
+) -> list[str]:
+    """Drop single-occurrence auto terms; keep seeds and listed hard terms."""
+    keep_lower = {k.lower() for k in (always_keep or set())}
+    out: list[str] = []
+    for term in terms:
+        if term.lower() in keep_lower:
+            out.append(term)
+            continue
+        if term_occurrence_count(term, document_text) >= min_count:
+            out.append(term)
+    return out
+
+
+def nahuatl_orthographic_variants(term: str) -> set[str]:
+    """Colonial Nahuatl spelling variants (cuauh/quauh, etc.) for fuzzy match-back."""
+    t = term.strip().lower()
+    forms: set[str] = {t}
+    if "cuauh" in t:
+        forms.add(t.replace("cuauh", "quauh"))
+    if "quauh" in t:
+        forms.add(t.replace("quauh", "cuauh"))
+    if t.startswith("cuau"):
+        forms.add("quau" + t[4:])
+    if t.startswith("quau"):
+        forms.add("cuau" + t[4:])
+    return forms
+
+
+def _match_view(text: str) -> str:
+    return re.sub(r"[\[\]]", "", strip_for_term_match(text)).lower()
+
+
+def term_present_in_text(
+    term: str,
+    text: str,
+    lang_cfg: JobLanguageConfig,
+    *,
+    section_hint: str | None = None,
+) -> bool:
+    """Match-back with bracket stripping and paleographic fuzzy variants."""
+    if not term.strip():
+        return False
+    view = _match_view(text)
+    forms = {term.lower()}
+    if section_hint == "paleographic_nahuatl" or lang_cfg.language == "nahuatl":
+        forms.update(nahuatl_orthographic_variants(term))
+    return any(f in view for f in forms)
+
+
 def effective_hard_terms(
-    text: str, lang_cfg: JobLanguageConfig, state: dict | None = None
+    text: str,
+    lang_cfg: JobLanguageConfig,
+    state: dict | None = None,
+    *,
+    document_text: str | None = None,
 ) -> list[str]:
     base = load_hard_terms(lang_cfg.source_id, state)
     auto = auto_hard_term_candidates(text, lang_cfg)
+    if document_text:
+        seed = set()
+        if state:
+            seed.update(str(t).lower() for t in (state.get("seed_hard_terms") or []))
+            profile = state.get("detected_source_profile") or {}
+            seed.update(str(t).lower() for t in (profile.get("seed_hard_terms") or []))
+        auto = filter_terms_by_min_occurrences(
+            auto, document_text, min_count=2, always_keep=seed
+        )
     seen: set[str] = set()
     merged: list[str] = []
     for term in base + auto:
@@ -353,12 +431,22 @@ def effective_hard_terms(
     return merged
 
 
-def page_has_hard_term(text: str, terms: list[str]) -> bool:
+def page_has_hard_term(
+    text: str,
+    terms: list[str],
+    lang_cfg: JobLanguageConfig | None = None,
+    *,
+    section_hint: str | None = None,
+) -> bool:
     if not terms:
         return False
-    match_text = strip_for_term_match(text)
-    lower = match_text.lower()
-    return any(t.strip() and t.lower() in lower for t in terms)
+    if lang_cfg is None:
+        match_text = strip_for_term_match(text)
+        lower = match_text.lower()
+        return any(t.strip() and t.lower() in lower for t in terms)
+    return any(
+        term_present_in_text(t, text, lang_cfg, section_hint=section_hint) for t in terms
+    )
 
 
 def strip_for_term_match(text: str) -> str:
