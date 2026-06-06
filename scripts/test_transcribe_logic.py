@@ -229,10 +229,59 @@ def test_patch_cap() -> None:
 
 
 def test_classify_page_section() -> None:
-    paleo = "Moquiuix [tlahcuilolli] y [xochitl] con macrones Āā en náhuatl."
+    paleo = (
+        "Nican moteneu [xiuhmolpilli] y [Nican moteneu] que Ācatl ça çoatl "
+        "en el texto náhuatl colonial."
+    )
     assert classify_page_section(paleo) == "paleographic_nahuatl"
-    spanish = "Capítulo introductorio de la biblioteca universitaria."
-    assert classify_page_section(spanish) == "editorial_spanish"
+
+    editorial = (
+        "PRESENTACIÓN\n\nLa biblioteca universitaria presenta esta edición "
+        "de paleografía y transcripción del manuscrito náhuatl. "
+        "Sin embargo, cabe señalar que el presente volumen…"
+    )
+    assert classify_page_section(editorial) == "editorial_spanish"
+
+    # Editorial intro mentioning náhuatl must not become paleographic.
+    editorial2 = (
+        "Capítulo introductorio. La transcripción del texto náhuatl y la "
+        "paleografía fueron realizadas en la universidad. Por lo tanto…"
+    )
+    assert classify_page_section(editorial2) == "editorial_spanish"
+
+    translation = (
+        "Moquíhuix reinó en Tenochtitlan. Los mexicas dieron principio "
+        "al año del fuego. Dice el texto en español lo que sigue…"
+    )
+    assert classify_page_section(translation) == "spanish_translation"
+
+
+def test_classify_anales_pilot_page_pattern() -> None:
+    """Regression: Anales pages 2-7 editorial, 8/10 paleographic, 9/11 translation."""
+    pages = {
+        2: (
+            "PRESENTACIÓN\n\nEdición de la biblioteca nacional. "
+            "Paleografía y transcripción del códice. Sin embargo…"
+        ),
+        7: (
+            "El manuscrito náhuatl y su estudio preliminar en la universidad. "
+            "Cabe señalar que la colección…"
+        ),
+        8: "[Nican moteneu] [xiuhmolpilli] ça Ācatl moquiuix",
+        9: "Moquíhuix y los mexicas en Tlatelolco. Traducción al español del pasaje.",
+        10: "[quauhtla] [xochitl] Ēhecatl çoatl",
+        11: "Los mexicas se aconsejaron. En español el relato continúa.",
+    }
+    expected = {
+        2: "editorial_spanish",
+        7: "editorial_spanish",
+        8: "paleographic_nahuatl",
+        9: "spanish_translation",
+        10: "paleographic_nahuatl",
+        11: "spanish_translation",
+    }
+    for num, body in pages.items():
+        assert classify_page_section(body) == expected[num], f"page {num}"
 
 
 def test_integrity_heal_stale_state() -> None:
@@ -337,6 +386,7 @@ def main() -> int:
         test_impossible_strings_per_source,
         test_patch_cap,
         test_classify_page_section,
+        test_classify_anales_pilot_page_pattern,
         test_integrity_heal_stale_state,
         test_impossible_strings_source_header,
         test_source_lock_blocks_mismatch,

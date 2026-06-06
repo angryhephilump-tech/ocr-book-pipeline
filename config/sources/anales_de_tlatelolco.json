@@ -8,7 +8,7 @@
   "detected_direction": "ltr",
   "detected_era": "modern printed (late 20th/early 21st century)",
   "hard_terms_file": "hard_terms_auto_anales_de_tlatelolco.txt",
-  "impossible_strings_file": "sources/anales_de_tlatelolco/impossible_strings.txt",
+  "impossible_strings_file": "impossible_auto_anales_de_tlatelolco.txt",
   "soft_terms_file": "soft_terms_anales_de_tlatelolco.txt",
   "normalization_rules_applied": [
     "spanish",
@@ -16,8 +16,20 @@
   ],
   "footnotes": true,
   "headers": true,
+  "page_sections": {
+    "2": "editorial_spanish",
+    "3": "editorial_spanish",
+    "4": "editorial_spanish",
+    "5": "editorial_spanish",
+    "6": "editorial_spanish",
+    "7": "editorial_spanish",
+    "8": "paleographic_nahuatl",
+    "9": "spanish_translation",
+    "10": "paleographic_nahuatl",
+    "11": "spanish_translation"
+  },
+  "spelling_variation_notes": "Intentional spelling variation: Nahuatl paleographic pages use colonial forms (e.g. Moquiuix without accent); Spanish translation pages use modern forms (e.g. Moqu\u00edhuix). Do not standardize across sections. Confirmed both-runs-wrong: unoaconejaron \u2192 aconsejaron (line-break merge error).",
   "run_date": "2026-06-05",
   "pages_processed": 10,
-  "accuracy_notes": "Intentional spelling variation: Nahuatl paleographic pages use colonial forms (e.g. Moquiuix without accent); Spanish translation pages use modern forms (e.g. Moquíhuix). Do not standardize across sections. Confirmed both-runs-wrong: unoaconejaron → aconsejaron (line-break merge error).",
-  "spelling_variation_notes": "Moquiuix/Moquíhuix/Moquihuix vary by section — paleographic Nahuatl vs modern Spanish translation. Do not auto-standardize."
+  "accuracy_notes": "Intentional spelling variation: Nahuatl paleographic pages use colonial forms (e.g. Moquiuix without accent); Spanish translation pages use modern forms (e.g. Moqu\u00edhuix). Do not standardize across sections. Confirmed both-runs-wrong: unoaconejaron \u2192 aconsejaron (line-break merge error)."
 }

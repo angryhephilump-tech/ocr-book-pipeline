@@ -29,3 +29,4 @@ build/**
 
 # Per-source transcription knowledge is intentional repo content (not build junk):
 # config/sources/, config/hard_terms_*.txt, config/impossible_*.txt, config/soft_terms_*.txt
+config/sources/test_source/

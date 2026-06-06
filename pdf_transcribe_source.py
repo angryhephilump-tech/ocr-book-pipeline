@@ -158,94 +158,129 @@ def auto_file_matches_slug(path: Path | str | None, slug: str) -> bool:
     return slug.lower() in name
 
 
-_NAHUATL_WORD_MARKERS = (
-    "moquiuix",
-    "moquíhuix",
-    "tlatelolco",
-    "náhuatl",
-    "nahuatl",
-    "quauh",
-    "xochitl",
-    "huix",
-    "mexica",
-    "mexicas",
-    "ç",
-    "tzin",
-    "tlan",
+_EDITORIAL_HEADERS = (
+    "PRESENTACIÓN",
+    "PRESENTACION",
+    "INTRODUCCIÓN",
+    "INTRODUCCION",
+    "PRÓLOGO",
+    "PROLOGO",
+    "NOTA DEL EDITOR",
+    "AGRADECIMIENTOS",
+    "ESTUDIO PRELIMINAR",
+    "NOTA PRELIMINAR",
 )
 
+_EDITORIAL_PROSE_MARKERS = (
+    "presentación",
+    "biblioteca",
+    "universidad",
+    "edición",
+    "colección",
+    "paleografía",
+    "paleografia",
+    "transcripción",
+    "transcripcion",
+    "manuscrito",
+    "introducción",
+    "introduccion",
+    "capítulo",
+    "capitulo",
+    "agradecimiento",
+    "sin embargo",
+    "por lo tanto",
+    "asimismo",
+    "cabe señalar",
+    "cabe senalar",
+    "en este trabajo",
+    "el presente volumen",
+)
 
-def _nahuatl_word_ratio(text: str) -> float:
-    words = re.findall(r"\S+", text)
-    if not words:
-        return 0.0
-    hits = 0
-    for w in words:
-        wl = re.sub(r"^[*_\[\]]+|[*_\]\].,;:!?]+$", "", w).lower()
-        if not wl:
+_TRANSLATION_PROSE_MARKERS = (
+    "traducción",
+    "traduccion",
+    "dice el texto",
+    "en español",
+    "en espanol",
+    "moquíhuix",
+    "moquihuix",
+    "los mexicas",
+    "dieron principio",
+    "año de",
+    "año del",
+)
+
+_BRACKET_SKIP = frozenset({"sic", "illegible", "damaged", "?", "…", "..."})
+
+
+def _has_editorial_header(text: str) -> bool:
+    head = text[:1200].upper()
+    return any(h in head for h in _EDITORIAL_HEADERS)
+
+
+def _manuscript_bracket_count(text: str) -> int:
+    """Bracketed colonial reconstructions like [Nican moteneu] — not [sic] or [illegible]."""
+    count = 0
+    for m in re.finditer(r"\[([^\]]+)\]", text):
+        inner = m.group(1).strip()
+        key = inner.lower().rstrip(".")
+        if key in _BRACKET_SKIP or key.startswith("sic"):
             continue
-        if re.search(r"[ĀāĒēĪīŌō]", w) or "ç" in w:
-            hits += 1
+        if len(inner) < 4:
             continue
-        if any(m in wl for m in _NAHUATL_WORD_MARKERS):
-            hits += 1
-    return hits / len(words)
+        if re.search(r"[A-Za-zÀ-ÿĀāĒēĪīŌō]", inner):
+            count += 1
+    return count
+
+
+def _marker_score(text: str, markers: tuple[str, ...]) -> int:
+    lower = text.lower()
+    return sum(1 for m in markers if m in lower)
 
 
 def classify_page_section(page_text: str, languages: dict[str, float] | None = None) -> str:
     """
     Section-aware tag for mixed colonial books.
     paleographic_nahuatl | spanish_translation | editorial_spanish | mixed
+
+    Priority: editorial headers → manuscript brackets (paleographic) →
+    modern editorial prose → Spanish translation narrative.
+    Mentioning "náhuatl" in Spanish front matter does NOT imply paleographic.
     """
     text = (page_text or "").strip()
     if not text or text.startswith("[Skipped:"):
         return "skipped"
-    nahuatl_ratio = _nahuatl_word_ratio(text)
-    if nahuatl_ratio > 0.5:
-        return "paleographic_nahuatl"
-    lower = text.lower()
-    bracket_count = len(re.findall(r"\[[^\]]{3,}\]", text))
-    macron_count = len(re.findall(r"[ĀāĒēĪīŌō]", text))
-    nahuatl_markers = sum(
-        1
-        for m in (
-            "moquiuix",
-            "tlatelolco",
-            "náhuatl",
-            "nahuatl",
-            "quauh",
-            "xochitl",
-            "ç",
-            "huix",
-        )
-        if m in lower
-    )
-    editorial_markers = sum(
-        1
-        for m in (
-            "capítulo",
-            "introducción",
-            "biblioteca",
-            "universidad",
-            "edición",
-            "paleografía",
-            "transcripción",
-        )
-        if m in lower
-    )
-    if bracket_count >= 2 or (macron_count >= 2 and nahuatl_markers >= 2):
-        return "paleographic_nahuatl"
-    if editorial_markers >= 2 and bracket_count == 0:
+
+    if _has_editorial_header(text):
         return "editorial_spanish"
-    langs = languages or {}
-    nahuatl_pct = langs.get("nahuatl", 0) + langs.get("classical_maya", 0)
-    if nahuatl_markers >= 3 and editorial_markers == 0:
+
+    manuscript_brackets = _manuscript_bracket_count(text)
+    macron_count = len(re.findall(r"[ĀāĒēĪīŌō]", text))
+    cedilla_count = text.lower().count("ç")
+    editorial_score = _marker_score(text, _EDITORIAL_PROSE_MARKERS)
+    translation_score = _marker_score(text, _TRANSLATION_PROSE_MARKERS)
+
+    if manuscript_brackets >= 2:
         return "paleographic_nahuatl"
-    if editorial_markers >= 1 and nahuatl_markers == 0:
+    if manuscript_brackets >= 1 and (macron_count >= 1 or cedilla_count >= 2):
+        return "paleographic_nahuatl"
+
+    if manuscript_brackets == 0:
+        if editorial_score >= 2:
+            return "editorial_spanish"
+        if translation_score >= 2 or (
+            translation_score >= 1 and editorial_score == 0
+        ):
+            return "spanish_translation"
+        if editorial_score >= 1:
+            return "editorial_spanish"
         return "spanish_translation"
-    if nahuatl_ratio > 0.25 or (nahuatl_pct >= 0.4 and nahuatl_markers >= 1):
-        return "mixed"
-    return "spanish_translation" if editorial_markers else "mixed"
+
+    if editorial_score >= 2:
+        return "editorial_spanish"
+    if translation_score >= 1:
+        return "spanish_translation"
+    return "mixed"
 
 
 def tag_page_sections_from_run1(work_dir: Path, state: dict) -> dict[int, str]:
