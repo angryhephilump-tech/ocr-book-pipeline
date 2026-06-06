@@ -14,6 +14,8 @@ const pilotPanel = document.getElementById("pilot-panel");
 const pilotChecks = document.getElementById("pilot-checks");
 const pilotUnlockMsg = document.getElementById("pilot-unlock-msg");
 const sourceNameInput = document.getElementById("source-name");
+const fullUnlockHint = document.getElementById("full-unlock-hint");
+let knownSources = [];
 const progressPanel = document.getElementById("progress-panel");
 const confirmPanel = document.getElementById("confirm-panel");
 const profileLines = document.getElementById("profile-lines");
@@ -108,6 +110,7 @@ async function loadKeyStatus() {
     syncProcessingModeUi(data.processing_mode);
     syncSpotCheckUi(data.spot_check_enabled);
     syncSourceUi(data);
+    knownSources = data.sources || [];
     if (data.saved) {
       showKeyForm(false);
       document.getElementById("key-hint").textContent = data.hint || "saved";
@@ -129,6 +132,10 @@ async function loadKeyStatus() {
     }
     showKeyForm(true);
   }
+  if (fileInput.files[0]) {
+    applySourceNameFromPdf(fileInput.files[0].name);
+  }
+  await refreshPilotGate();
 }
 
 changeKeyBtn.addEventListener("click", () => {
@@ -173,20 +180,62 @@ function updateWorkDirHint() {
   }
 }
 
+function guessSourceNameFromPdf(filename) {
+  const stem = slugifySourceName((filename || "").replace(/\.pdf$/i, ""));
+  if (!stem) return "";
+  for (const suffix of ["_copyright", "_scan", "_ocr", "_transcribe", "_output"]) {
+    if (stem.endsWith(suffix)) {
+      const trimmed = stem.slice(0, -suffix.length);
+      if (knownSources.some((s) => s.source_name === trimmed)) return trimmed;
+    }
+  }
+  const hit = knownSources.find(
+    (s) => stem.includes(s.source_name) || s.source_name.includes(stem)
+  );
+  if (hit) return hit.source_name;
+  return stem;
+}
+
+function applySourceNameFromPdf(filename) {
+  if (!sourceNameInput || (sourceNameInput.value || "").trim()) return;
+  const guess = guessSourceNameFromPdf(filename);
+  if (guess) {
+    sourceNameInput.value = guess;
+    refreshPilotGate();
+    updateWorkDirHint();
+  }
+}
+
 async function refreshPilotGate() {
+  if (!modeFull) return;
   const src = (sourceNameInput?.value || "").trim();
-  if (!src || !modeFull) return;
+  if (!src) {
+    modeFull.disabled = true;
+    if (fullLock) {
+      fullLock.classList.remove("hidden");
+      fullLock.textContent = "🔒 enter source name above";
+    }
+    if (fullUnlockHint) fullUnlockHint.textContent = "";
+    return;
+  }
   try {
     const res = await fetch(`/api/pilot-status?source_name=${encodeURIComponent(src)}`);
     const data = await parseApiResponse(res);
     const unlocked = data.full_book_unlocked;
     modeFull.disabled = !unlocked;
-    if (fullLock) fullLock.classList.toggle("hidden", unlocked);
+    if (fullLock) {
+      fullLock.classList.toggle("hidden", unlocked);
+      if (!unlocked) fullLock.textContent = "🔒 pilot required";
+    }
+    if (fullUnlockHint) {
+      fullUnlockHint.textContent = data.unlock_reason || "";
+    }
     if (!unlocked && modeFull.checked) {
       document.getElementById("mode-test").checked = true;
     }
   } catch (_) {
     modeFull.disabled = true;
+    if (fullLock) fullLock.classList.remove("hidden");
   }
 }
 
@@ -235,7 +284,6 @@ workDirInput?.addEventListener("input", updateWorkDirHint);
 fileInput.addEventListener("change", updateWorkDirHint);
 
 loadKeyStatus();
-refreshPilotGate();
 
 function setFile(file) {
   if (!file) return;
@@ -243,6 +291,7 @@ function setFile(file) {
   dt.items.add(file);
   fileInput.files = dt.files;
   fileName.textContent = file.name;
+  applySourceNameFromPdf(file.name);
 }
 
 document.getElementById("pick").addEventListener("click", (e) => {
@@ -253,7 +302,10 @@ document.getElementById("pick").addEventListener("click", (e) => {
 drop.addEventListener("click", () => fileInput.click());
 
 fileInput.addEventListener("change", () => {
-  if (fileInput.files[0]) fileName.textContent = fileInput.files[0].name;
+  if (fileInput.files[0]) {
+    fileName.textContent = fileInput.files[0].name;
+    applySourceNameFromPdf(fileInput.files[0].name);
+  }
 });
 
 ["dragenter", "dragover"].forEach((ev) => {

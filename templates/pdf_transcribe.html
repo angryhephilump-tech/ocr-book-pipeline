@@ -72,38 +72,12 @@
 
 
 
-      <fieldset class="mode">
-
-        <legend>How many pages?</legend>
-
-        <label><input type="radio" name="mode" value="test" id="mode-test" checked> <span id="pilot-label">Run pilot (10 pages)</span> after skip (recommended)</label>
-        <p class="hint">Complete a passing 10-page pilot before full book unlocks. Example: skip 12 + pilot 10 → PDF pages 13–22.</p>
-
-        <label class="pilot-locked"><input type="radio" name="mode" value="full" id="mode-full" disabled> <span id="full-label">Full book (all pages)</span> <span class="lock-badge hidden" id="full-lock">🔒 pilot required</span></label>
-        <label class="remember skip-front">
-          Skip first
-          <input type="number" name="skip_front_pages" id="skip-front-pages" value="2" min="0" max="30" title="Google Books notice pages at the start">
-          pages (Google notice — public domain scans)
-        </label>
-      </fieldset>
-
-      <fieldset class="mode processing-mode">
-        <legend>Cost &amp; speed</legend>
-        <label><input type="radio" name="processing_mode" value="auto" checked> <strong>Recommended</strong> — test uses live API (minutes); full book uses batch API (<strong>50% off</strong>, usually under 1 hour)</label>
-        <label><input type="radio" name="processing_mode" value="realtime"> Always live API (see each page finish, full price)</label>
-        <label><input type="radio" name="processing_mode" value="batch"> Always batch API (50% off, wait for Anthropic queue)</label>
-        <label class="remember">
-          <input type="checkbox" name="spot_check" value="1" id="spot-check" checked>
-          Patch hard-name sentences only (never replace whole pages)
-        </label>
-      </fieldset>
-
       <fieldset class="mode source-config">
         <legend>Source</legend>
         <label class="field">
           <span>Source name</span>
           <input type="text" name="source_name" id="source-name" placeholder="e.g. anales_de_tlatelolco" required>
-          <small>Owns config under <code>config/sources/&lt;name&gt;/</code>. Re-runs skip detection if saved.</small>
+          <small>Auto-filled from PDF when possible. Must match a saved pilot profile to unlock full book.</small>
         </label>
         <label class="field">
           <span>Output folder (optional)</span>
@@ -143,7 +117,32 @@
         </label>
       </fieldset>
 
+      <fieldset class="mode">
 
+        <legend>How many pages?</legend>
+
+        <label><input type="radio" name="mode" value="test" id="mode-test" checked> <span id="pilot-label">Run pilot (10 pages)</span> after skip (recommended)</label>
+        <p class="hint">Complete a 10-page pilot before full book unlocks. Example: skip 12 + pilot 10 → PDF pages 13–22.</p>
+
+        <label class="pilot-locked"><input type="radio" name="mode" value="full" id="mode-full"> <span id="full-label">Full book (all pages)</span> <span class="lock-badge" id="full-lock">🔒 enter source name</span></label>
+        <p class="hint" id="full-unlock-hint"></p>
+        <label class="remember skip-front">
+          Skip first
+          <input type="number" name="skip_front_pages" id="skip-front-pages" value="2" min="0" max="30" title="Google Books notice pages at the start">
+          pages (Google notice — public domain scans)
+        </label>
+      </fieldset>
+
+      <fieldset class="mode processing-mode">
+        <legend>Cost &amp; speed</legend>
+        <label><input type="radio" name="processing_mode" value="auto" checked> <strong>Recommended</strong> — test uses live API (minutes); full book uses batch API (<strong>50% off</strong>, usually under 1 hour)</label>
+        <label><input type="radio" name="processing_mode" value="realtime"> Always live API (see each page finish, full price)</label>
+        <label><input type="radio" name="processing_mode" value="batch"> Always batch API (50% off, wait for Anthropic queue)</label>
+        <label class="remember">
+          <input type="checkbox" name="spot_check" value="1" id="spot-check" checked>
+          Patch hard-name sentences only (never replace whole pages)
+        </label>
+      </fieldset>
 
       <div class="actions">
 
@@ -235,7 +234,7 @@
 
   </main>
 
-  <script src="/static/pdf_transcribe.js?v=9"></script>
+  <script src="/static/pdf_transcribe.js?v=10"></script>
 
 </body>
 

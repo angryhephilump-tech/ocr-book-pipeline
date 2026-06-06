@@ -312,6 +312,13 @@ def test_impossible_strings_source_header() -> None:
     assert read_impossible_strings_file(path, "other_source") is None
 
 
+def test_resolve_source_slug_hint() -> None:
+    from pdf_transcribe_integrity import resolve_source_slug_hint
+
+    assert resolve_source_slug_hint("anales_de_tlatelolco") == "anales_de_tlatelolco"
+    assert resolve_source_slug_hint("anales_de_tlatelolco_copyright") == "anales_de_tlatelolco"
+
+
 def test_spot_patch_rejection_check() -> None:
     from pdf_transcribe_integrity import spot_patch_rejection_check_ok
 
@@ -417,6 +424,7 @@ def main() -> int:
         test_patch_cap,
         test_classify_page_section,
         test_classify_anales_pilot_page_pattern,
+        test_resolve_source_slug_hint,
         test_spot_patch_rejection_check,
         test_integrity_heal_stale_state,
         test_impossible_strings_source_header,

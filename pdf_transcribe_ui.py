@@ -114,9 +114,11 @@ def create_app() -> Flask:
     def api_key_status():
         status = pdf_transcribe.api_key_status()
         status["app_version"] = 6
+        from pdf_transcribe_integrity import list_saved_sources
         from pdf_transcribe_lang import list_source_ids
 
         status["source_ids"] = list_source_ids()
+        status["sources"] = list_saved_sources()
         return jsonify(status)
 
     @app.route("/api/save-key", methods=["POST"])

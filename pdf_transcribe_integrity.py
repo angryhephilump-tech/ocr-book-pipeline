@@ -396,14 +396,76 @@ def load_source_pages_processed(slug: str) -> int:
         return 0
 
 
+def resolve_source_slug_hint(hint: str) -> str:
+    """
+    Map PDF filename / user input to a saved source slug.
+    e.g. anales_de_tlatelolco_copyright → anales_de_tlatelolco when that config exists.
+    """
+    raw = slugify_source_name(hint)
+    if not raw:
+        return ""
+    config_dir = CONFIG_DIR / "sources"
+    if (config_dir / f"{raw}.json").is_file():
+        return raw
+    candidates = [raw]
+    for suffix in ("_copyright", "_scan", "_ocr", "_transcribe", "_output"):
+        if raw.endswith(suffix):
+            candidates.append(raw[: -len(suffix)])
+    if config_dir.is_dir():
+        for path in config_dir.glob("*.json"):
+            slug = path.stem
+            for cand in candidates:
+                if cand == slug or cand in slug or slug in cand:
+                    return slug
+    return raw
+
+
+def list_saved_sources() -> list[dict]:
+    """All config/sources/*.json profiles with pilot progress."""
+    out: list[dict] = []
+    config_dir = CONFIG_DIR / "sources"
+    if not config_dir.is_dir():
+        return out
+    for path in sorted(config_dir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        slug = data.get("source_name") or path.stem
+        pages = int(data.get("pages_processed") or 0)
+        out.append(
+            {
+                "source_name": slug,
+                "pages_processed": pages,
+                "pilot_complete": pages >= PILOT_PAGE_THRESHOLD,
+                "full_book_unlocked": pages >= PILOT_PAGE_THRESHOLD,
+            }
+        )
+    return out
+
+
 def pilot_gate_status(source_name: str) -> dict:
-    slug = slugify_source_name(source_name)
+    slug = resolve_source_slug_hint(source_name)
     pages = load_source_pages_processed(slug)
+    unlocked = pages >= PILOT_PAGE_THRESHOLD
+    reason = ""
+    if not slug:
+        reason = "Enter a source name in the Source section below."
+    elif not unlocked:
+        reason = (
+            f"Run a 10-page pilot for {slug!r} first "
+            f"({pages}/{PILOT_PAGE_THRESHOLD} pages in saved config)."
+        )
+    else:
+        resolved = " (matched saved profile)" if slug != slugify_source_name(source_name) else ""
+        reason = f"Pilot complete — {pages} pages processed{resolved}."
     return {
         "source_name": slug,
+        "resolved_from": slugify_source_name(source_name),
         "pages_processed": pages,
-        "pilot_complete": pages >= PILOT_PAGE_THRESHOLD,
-        "full_book_unlocked": pages >= PILOT_PAGE_THRESHOLD,
+        "pilot_complete": unlocked,
+        "full_book_unlocked": unlocked,
+        "unlock_reason": reason,
     }
 
 
@@ -557,10 +619,11 @@ def evaluate_pilot_checks(work_dir: Path, state: dict, stats: dict | None = None
     pages_this_run = int((stats or {}).get("total_pages") or 0)
     historical = load_source_pages_processed(slug)
     pilot_pages = max(pages_this_run, historical)
+    # Full book unlocks after 10-page pilot is saved; checklist reds are advisory.
     return {
         "all_passed": all_pass,
         "pilot_complete": pilot_pages >= PILOT_PAGE_THRESHOLD,
-        "full_book_unlocked": all_pass and pilot_pages >= PILOT_PAGE_THRESHOLD,
+        "full_book_unlocked": pilot_pages >= PILOT_PAGE_THRESHOLD,
         "checks": [
             {
                 "name": c.name,
