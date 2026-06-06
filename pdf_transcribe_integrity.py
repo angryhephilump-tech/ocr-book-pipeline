@@ -415,6 +415,67 @@ class PilotCheck:
     auto_fix: str | None = None
 
 
+_REJECT_REASON_RE = re.compile(r"REJECTED\s+\(([^)]+)\)")
+
+
+def parse_spot_patch_rejection_stats(work_dir: Path) -> dict[str, int]:
+    """Count spot-patch rejections by reason from spot_patch_log.txt."""
+    path = work_dir / "spot_patch_log.txt"
+    counts: dict[str, int] = {}
+    if not path.is_file():
+        return counts
+    for line in path.read_text(encoding="utf-8").splitlines():
+        m = _REJECT_REASON_RE.search(line)
+        if not m:
+            continue
+        reason = m.group(1).strip() or "unknown"
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def spot_patch_rejection_check_ok(
+    work_dir: Path,
+    stats: dict | None = None,
+    *,
+    blocked_threshold: float = 0.5,
+) -> tuple[bool, str]:
+    """
+    Pass unless >50% of rejections are impossible_string (blocked corrections).
+    High unchanged rate means transcription was already correct — not a failure.
+    """
+    applied = int((stats or {}).get("spot_patches_applied") or 0)
+    rejected = int((stats or {}).get("spot_patches_rejected") or 0)
+    total = applied + rejected
+    if total == 0:
+        return True, "No patches"
+
+    by_reason = parse_spot_patch_rejection_stats(work_dir)
+    if not by_reason and rejected:
+        by_reason = {"unknown": rejected}
+
+    unchanged = by_reason.get("unchanged", 0)
+    blocked = by_reason.get("impossible_string", 0)
+    other = rejected - unchanged - blocked
+
+    blocked_share = (blocked / rejected) if rejected else 0.0
+    ok = rejected == 0 or blocked_share <= blocked_threshold
+
+    parts = [f"{rejected}/{total} rejected"]
+    if unchanged:
+        parts.append(f"unchanged (already correct): {unchanged}")
+    if blocked:
+        parts.append(f"impossible_string (blocked): {blocked} ({blocked_share:.0%} of rejections)")
+    if other:
+        parts.append(f"other: {other}")
+
+    detail = " — ".join(parts)
+    if ok and unchanged == rejected:
+        detail += " — clean transcription"
+    elif not ok:
+        detail += " — too many blocked corrections"
+    return ok, detail
+
+
 def evaluate_pilot_checks(work_dir: Path, state: dict, stats: dict | None = None) -> dict:
     """Green/red checklist after a pilot run."""
     slug = resolve_source_slug(state) if state else ""
@@ -464,16 +525,13 @@ def evaluate_pilot_checks(work_dir: Path, state: dict, stats: dict | None = None
         )
     )
 
-    applied = int((stats or {}).get("spot_patches_applied") or 0)
-    rejected = int((stats or {}).get("spot_patches_rejected") or 0)
-    total_patches = applied + rejected
-    reject_rate = (rejected / total_patches) if total_patches else 0.0
-    patch_ok = total_patches == 0 or reject_rate <= 0.8
+    patch_ok, patch_detail = spot_patch_rejection_check_ok(work_dir, stats)
     checks.append(
         PilotCheck(
-            "Spot patch rejection rate reasonable",
+            "Spot patch blocked corrections reasonable",
             patch_ok,
-            f"{rejected}/{total_patches} rejected ({reject_rate:.0%})" if total_patches else "No patches",
+            patch_detail,
+            "regenerate_impossible" if not patch_ok else None,
         )
     )
 

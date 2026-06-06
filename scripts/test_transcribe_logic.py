@@ -312,6 +312,36 @@ def test_impossible_strings_source_header() -> None:
     assert read_impossible_strings_file(path, "other_source") is None
 
 
+def test_spot_patch_rejection_check() -> None:
+    from pdf_transcribe_integrity import spot_patch_rejection_check_ok
+
+    wd = Path(tempfile.mkdtemp())
+    log = wd / "spot_patch_log.txt"
+    log.write_text(
+        "Page 2\n"
+        "  op 0: REJECTED (unchanged) (body) [Tlatelolco]\n"
+        "  op 1: REJECTED (unchanged) (body) [Tenochtitlan]\n"
+        "  op 2: APPLIED (body) [náhuatl]\n",
+        encoding="utf-8",
+    )
+    stats = {"spot_patches_applied": 1, "spot_patches_rejected": 2}
+    ok, detail = spot_patch_rejection_check_ok(wd, stats)
+    assert ok
+    assert "clean transcription" in detail
+
+    log.write_text(
+        "Page 3\n"
+        "  op 0: REJECTED (impossible_string) (body) [foo]\n"
+        "  op 1: REJECTED (impossible_string) (body) [bar]\n"
+        "  op 2: REJECTED (unchanged) (body) [baz]\n",
+        encoding="utf-8",
+    )
+    stats2 = {"spot_patches_applied": 0, "spot_patches_rejected": 3}
+    ok2, detail2 = spot_patch_rejection_check_ok(wd, stats2)
+    assert not ok2
+    assert "blocked" in detail2
+
+
 def test_source_lock_blocks_mismatch() -> None:
     from pdf_transcribe_integrity import run_startup_integrity, write_source_lock
 
@@ -387,6 +417,7 @@ def main() -> int:
         test_patch_cap,
         test_classify_page_section,
         test_classify_anales_pilot_page_pattern,
+        test_spot_patch_rejection_check,
         test_integrity_heal_stale_state,
         test_impossible_strings_source_header,
         test_source_lock_blocks_mismatch,
