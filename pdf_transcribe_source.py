@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 from pdf_transcribe_detect import slugify_source_name
@@ -210,6 +211,67 @@ _TRANSLATION_PROSE_MARKERS = (
     "año del",
 )
 
+# Distinct Nahuatl morphemes / paleographic cues — not place names used in Spanish prose.
+_NAHUATL_LINGUISTIC_MARKERS = (
+    "nican",
+    "moteneu",
+    "çoatl",
+    "coatl",
+    "tepetl",
+    "tlahtoani",
+    "tlahtoa",
+    "xiuhmolpilli",
+    "quauhtla",
+    "xochitl",
+    "ēhecatl",
+    "ehecatl",
+    "miquiztli",
+    "tochtli",
+    "acatl",
+)
+
+# Colonial Spanish function words (often without accents); ç and q̄ are scribal Spanish, not Nahuatl.
+_SPANISH_COLONIAL_MARKERS = (
+    "como",
+    "que",
+    "los",
+    "las",
+    "del",
+    "por",
+    "con",
+    "habia",
+    "habían",
+    "abian",
+    "venido",
+    "alli",
+    "allí",
+    "entonces",
+    "despues",
+    "después",
+    "dijo",
+    "tenia",
+    "tenía",
+    "señor",
+    "senor",
+    "año",
+    "porque",
+    "porq",
+    "esto",
+    "esta",
+    "aquel",
+    "aquella",
+    "donde",
+    "cuando",
+    "muchos",
+    "muchas",
+    "tambien",
+    "también",
+    "ciudad",
+    "açordaron",
+    "çerto",
+    "çaminos",
+)
+
 _BRACKET_SKIP = frozenset({"sic", "illegible", "damaged", "?", "…", "..."})
 
 
@@ -238,14 +300,52 @@ def _marker_score(text: str, markers: tuple[str, ...]) -> int:
     return sum(1 for m in markers if m in lower)
 
 
+def _word_marker_score(text: str, markers: tuple[str, ...]) -> int:
+    lower = text.lower()
+    return sum(1 for m in markers if re.search(rf"\b{re.escape(m)}\b", lower))
+
+
+def _precomposed_nahuatl_macron_count(text: str) -> int:
+    """Vowel macrons in Nahuatl editions (ĀāĒē) — semantically meaningful, not Spanish q̄ abbrev."""
+    return len(re.findall(r"[ĀāĒēĪīŌō]", text))
+
+
+def _scribal_combining_macron_count(text: str) -> int:
+    """Combining macron on a letter (e.g. q̄, n̄) — colonial Spanish abbreviation stroke."""
+    nfd = unicodedata.normalize("NFD", text)
+    return len(re.findall(r"[^\s\d\W]\u0304", nfd))
+
+
+def _looks_like_archaic_spanish_prose(text: str) -> bool:
+    """
+    Colonial Spanish narrative: Spanish function words + ç / q̄ scribal marks.
+    Not paleographic Nahuatl even when diacritic-poor.
+    """
+    spanish_score = _word_marker_score(text, _SPANISH_COLONIAL_MARKERS)
+    nahuatl_score = _marker_score(text, _NAHUATL_LINGUISTIC_MARKERS)
+    precomposed = _precomposed_nahuatl_macron_count(text)
+    if nahuatl_score > 0 or precomposed > 0:
+        return False
+    if spanish_score >= 3:
+        return True
+    if spanish_score >= 2 and _scribal_combining_macron_count(text) >= 1:
+        return True
+    if spanish_score >= 2 and text.lower().count("ç") >= 2:
+        return True
+    return False
+
+
 def classify_page_section(page_text: str, languages: dict[str, float] | None = None) -> str:
     """
     Section-aware tag for mixed colonial books.
     paleographic_nahuatl | spanish_translation | editorial_spanish | mixed
 
-    Priority: editorial headers → manuscript brackets (paleographic) →
-    modern editorial prose → Spanish translation narrative.
-    Mentioning "náhuatl" in Spanish front matter does NOT imply paleographic.
+    Priority: editorial headers → archaic Spanish prose → paleographic Nahuatl
+    (strict: manuscript brackets + Nahuatl morphemes/macrons) → editorial → translation.
+
+    Archaic Spanish (q̄ abbreviations, ç, no accents) is spanish_translation, not Nahuatl.
+    Mislabeling Spanish as paleographic_nahuatl only skips Tier-2 unification (safe);
+    mislabeling Nahuatl as Spanish would harm meaningful diacritics (avoid).
     """
     text = (page_text or "").strip()
     if not text or text.startswith("[Skipped:"):
@@ -255,14 +355,19 @@ def classify_page_section(page_text: str, languages: dict[str, float] | None = N
         return "editorial_spanish"
 
     manuscript_brackets = _manuscript_bracket_count(text)
-    macron_count = len(re.findall(r"[ĀāĒēĪīŌō]", text))
-    cedilla_count = text.lower().count("ç")
+    precomposed_macrons = _precomposed_nahuatl_macron_count(text)
+    nahuatl_score = _marker_score(text, _NAHUATL_LINGUISTIC_MARKERS)
     editorial_score = _marker_score(text, _EDITORIAL_PROSE_MARKERS)
     translation_score = _marker_score(text, _TRANSLATION_PROSE_MARKERS)
 
-    if manuscript_brackets >= 2:
+    if _looks_like_archaic_spanish_prose(text):
+        return "spanish_translation"
+
+    if manuscript_brackets >= 2 and (precomposed_macrons >= 1 or nahuatl_score >= 1):
         return "paleographic_nahuatl"
-    if manuscript_brackets >= 1 and (macron_count >= 1 or cedilla_count >= 2):
+    if manuscript_brackets >= 1 and precomposed_macrons >= 1 and nahuatl_score >= 1:
+        return "paleographic_nahuatl"
+    if precomposed_macrons >= 2 and nahuatl_score >= 1:
         return "paleographic_nahuatl"
 
     if manuscript_brackets == 0:

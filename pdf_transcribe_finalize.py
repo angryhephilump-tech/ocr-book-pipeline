@@ -51,6 +51,7 @@ from pdf_transcribe import (
     anthropic_request,
 )
 from pdf_transcribe_lang import DocumentTermIndex, effective_hard_terms, page_has_hard_term
+from pdf_transcribe_source import page_section_hint
 
 SPOT_PREP_REPORT_EVERY = 25
 from pdf_transcribe_source import (
@@ -64,6 +65,7 @@ from pdf_transcribe_spot import (
     PatchOperation,
     apply_all_patches,
     parse_page_patch_response,
+    split_patch_operations_by_token_budget,
 )
 
 
@@ -139,26 +141,36 @@ def generate_differences(work_dir: Path) -> Path:
     return out_path
 
 
-def count_reconcile_whitespace_skips(work_dir: Path, page_numbers: list[int]) -> int:
+def count_reconcile_whitespace_skips(
+    work_dir: Path, page_numbers: list[int], state: dict | None = None
+) -> int:
+    lang_cfg = job_config_from_state(state) if state else None
     n = 0
     for page_num in page_numbers:
         t1 = read_run_page_body(work_dir, 1, page_num)
         t2 = read_run_page_body(work_dir, 2, page_num)
         if is_skip_body(t1) and is_skip_body(t2):
             continue
-        if pages_disagree(t1, t2) and not pages_need_content_reconcile(t1, t2):
+        section = page_section_hint(state, page_num) if state else None
+        if pages_disagree(t1, t2) and not pages_need_content_reconcile(
+            t1, t2, lang_cfg, section=section
+        ):
             n += 1
     return n
 
 
-def pages_needing_reconcile(work_dir: Path, page_numbers: list[int]) -> list[ReconcileWorkItem]:
+def pages_needing_reconcile(
+    work_dir: Path, page_numbers: list[int], state: dict | None = None
+) -> list[ReconcileWorkItem]:
+    lang_cfg = job_config_from_state(state) if state else None
     items: list[ReconcileWorkItem] = []
     for page_num in page_numbers:
         t1 = read_run_page_body(work_dir, 1, page_num)
         t2 = read_run_page_body(work_dir, 2, page_num)
         if is_skip_body(t1) and is_skip_body(t2):
             continue
-        if not pages_need_content_reconcile(t1, t2):
+        section = page_section_hint(state, page_num) if state else None
+        if not pages_need_content_reconcile(t1, t2, lang_cfg, section=section):
             continue
         rec_path = reconcile_page_path(work_dir, page_num)
         if rec_path.is_file():
@@ -288,6 +300,26 @@ def spot_patch_log_path(work_dir: Path) -> Path:
     return work_dir / "spot_patch_log.txt"
 
 
+def spot_raw_page_response_path(work_dir: Path, page_num: int) -> Path:
+    return work_dir / "spot_check" / f"raw_page_{page_num:04d}.txt"
+
+
+def _save_spot_raw_page_response(
+    work_dir: Path,
+    page_num: int,
+    raw_text: str,
+    *,
+    chunk_idx: int = 0,
+) -> None:
+    path = spot_raw_page_response_path(work_dir, page_num)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if chunk_idx > 0:
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n--- chunk {chunk_idx + 1} ---\n{raw_text}")
+    else:
+        path.write_text(raw_text, encoding="utf-8")
+
+
 def _append_spot_patch_log(work_dir: Path, page_num: int, entries: list[dict]) -> None:
     if not entries:
         return
@@ -380,6 +412,7 @@ def _run_pass4_transcription(
     model: str,
     work_dir: Path,
     state: dict,
+    page_num: int,
 ) -> str:
     user_prompt = transcription_user_prompt(work_dir, state)
     try:
@@ -391,7 +424,9 @@ def _run_pass4_transcription(
         )
     except RuntimeError as exc:
         return f"[Pass 4 failed: {exc}]"
-    return normalize_transcription_output(raw)
+    lang_cfg = job_config_from_state(state)
+    section = page_section_hint(state, page_num)
+    return normalize_transcription_output(raw, lang_cfg, section=section)
 
 
 def _apply_pass4_if_third_reading(
@@ -404,6 +439,7 @@ def _apply_pass4_if_third_reading(
     model: str,
     work_dir: Path,
     state: dict,
+    page_num: int,
 ) -> tuple[str, dict | None, bool]:
     """If reconcile is a third reading, run pass 4 and resolve."""
     if not reconcile_needs_pass4(reconcile_body, run1_text, run2_text):
@@ -415,6 +451,7 @@ def _apply_pass4_if_third_reading(
         model=model,
         work_dir=work_dir,
         state=state,
+        page_num=page_num,
     )
     time.sleep(API_DELAY_SEC)
     final_body, outcome, needs_review = resolve_pass4_outcome(
@@ -560,13 +597,15 @@ def _process_pass4_batch(
             continue
         results_by_page[page_num] = text
 
+    lang_cfg = job_config_from_state(state)
     outcomes: list[tuple[dict, bool]] = []
     for item in pending:
         raw = results_by_page.get(item.page_num)
         if raw is None:
             pass4_body = "[Pass 4 failed: missing batch result]"
         else:
-            pass4_body = normalize_transcription_output(raw)
+            section = page_section_hint(state, item.page_num)
+            pass4_body = normalize_transcription_output(raw, lang_cfg, section=section)
         final_body, pass4_extra, pass4_review = _resolve_pass4_page(item, pass4_body)
         entry, review = _finalize_reconcile_page(
             work_dir,
@@ -607,6 +646,7 @@ def _process_reconcile_result(
         model=model,
         work_dir=work_dir,
         state=state,
+        page_num=page_num,
     )
     return _finalize_reconcile_page(
         work_dir,
@@ -829,6 +869,7 @@ def finalize_pipeline(
     generate_differences(work_dir)
 
     log_entries: list[dict] = []
+    lang_cfg = job_config_from_state(state)
     stats: dict = {
         "model": model,
         "total_pages": total_pages,
@@ -838,7 +879,7 @@ def finalize_pipeline(
         "page_numbers": page_numbers,
         "pages_reconciled": 0,
         "pages_reconcile_skipped_whitespace": count_reconcile_whitespace_skips(
-            work_dir, page_numbers
+            work_dir, page_numbers, state
         ),
         "pages_spot_checked": 0,
         "spot_patches_applied": 0,
@@ -852,7 +893,6 @@ def finalize_pipeline(
         "script": state.get("script", "latin"),
         "batch_collisions": state.get("batch_collisions") or [],
     }
-    lang_cfg = job_config_from_state(state)
     impossible = load_impossible_strings(lang_cfg.source_id, state)
     if not state.get("page_sections"):
         tag_page_sections_from_run1(work_dir, state)
@@ -862,7 +902,7 @@ def finalize_pipeline(
     document_text = build_document_text(work_dir, page_numbers, page_bodies=page_bodies)
     term_index = DocumentTermIndex(document_text) if document_text else None
 
-    reconcile_items = pages_needing_reconcile(work_dir, page_numbers)
+    reconcile_items = pages_needing_reconcile(work_dir, page_numbers, state)
     if reconcile_items and report:
         report(
             "reconcile",
@@ -909,7 +949,10 @@ def finalize_pipeline(
                 item = reconcile_by_page.get(page_num)
                 if not item:
                     continue
-                body, uncertain, note = parse_reconcile_output(text)
+                section = page_section_hint(state, page_num)
+                body, uncertain, note = parse_reconcile_output(
+                    text, lang_cfg, section=section
+                )
                 if reconcile_needs_pass4(body, item.run1_text, item.run2_text):
                     pass4_pending.append(
                         Pass4WorkItem(
@@ -969,7 +1012,10 @@ def finalize_pipeline(
                             item.image_path, model, item.run1_text, item.run2_text, lang_cfg
                         ),
                     )
-                    body, uncertain, note = parse_reconcile_output(raw)
+                    section = page_section_hint(state, item.page_num)
+                    body, uncertain, note = parse_reconcile_output(
+                        raw, lang_cfg, section=section
+                    )
                 except RuntimeError as exc:
                     body, uncertain, note = f"[Reconcile failed: {exc}]", True, str(exc)
                 entry, pass4_review = _process_reconcile_result(
@@ -1045,12 +1091,31 @@ def finalize_pipeline(
                 reqs = sorted(by_page[page_num], key=lambda r: r.operation.op_index)
                 return [r.operation for r in reqs]
 
-            def _apply_page_spot_results(page_num: int, raw_text: str) -> None:
+            def _parse_chunk_responses(
+                chunk_ops: list[PatchOperation],
+                raw_text: str,
+                page_num: int,
+            ) -> list[str]:
+                originals = [op.sentence for op in chunk_ops]
+                responses = parse_page_patch_response(
+                    raw_text, len(chunk_ops), originals
+                )
+                section = page_section_hint(state, page_num)
+                return [
+                    normalize_transcription_output(r, lang_cfg, section=section)
+                    for r in responses
+                ]
+
+            def _apply_page_spot_results(
+                page_num: int,
+                chunk_results: list[tuple[list[PatchOperation], list[str]]],
+            ) -> None:
                 base = base_page_body(work_dir, page_num)
-                ops = _ops_for_page(page_num)
-                originals = [op.sentence for op in ops]
-                responses = parse_page_patch_response(raw_text, len(ops), originals)
-                responses = [normalize_transcription_output(r) for r in responses]
+                ops: list[PatchOperation] = []
+                responses: list[str] = []
+                for chunk_ops, chunk_responses in chunk_results:
+                    ops.extend(chunk_ops)
+                    responses.extend(chunk_responses)
                 hint = page_section_hint(state, page_num)
                 applied, rejected, needs_review = _save_spot_patched_page(
                     work_dir,
@@ -1070,21 +1135,29 @@ def finalize_pipeline(
                     stats["spot_missing_term_reviews"] += 1
                     stats["human_review_pages"].append(page_num)
 
+            def _spot_chunks_for_page(page_num: int) -> list[list[PatchOperation]]:
+                return split_patch_operations_by_token_budget(_ops_for_page(page_num))
+
             if use_batch:
-                payload = [
-                    {
-                        "custom_id": spot_page_custom_id(page_num),
-                        "params": build_page_spot_patch_params(
-                            by_page[page_num][0].image_path,
-                            model,
-                            _ops_for_page(page_num),
-                            lang_cfg,
-                            section_hint=page_section_hint(state, page_num),
-                        ),
-                    }
-                    for page_num in pages_with_spot
-                ]
-                results_by_page: dict[int, str] = {}
+                payload: list[dict] = []
+                for page_num in pages_with_spot:
+                    chunks = _spot_chunks_for_page(page_num)
+                    image_path = by_page[page_num][0].image_path
+                    hint = page_section_hint(state, page_num)
+                    for chunk_idx, chunk_ops in enumerate(chunks):
+                        payload.append(
+                            {
+                                "custom_id": spot_page_custom_id(page_num, chunk_idx),
+                                "params": build_page_spot_patch_params(
+                                    image_path,
+                                    model,
+                                    chunk_ops,
+                                    lang_cfg,
+                                    section_hint=hint,
+                                ),
+                            }
+                        )
+                results_by_chunk: dict[tuple[int, int], str] = {}
                 for line in _run_batch_custom(
                     api_key,
                     model,
@@ -1098,14 +1171,28 @@ def finalize_pipeline(
                     if not cid or text is None:
                         continue
                     try:
-                        kind, _, page_num = parse_batch_custom_id(cid)
+                        kind, chunk_idx, page_num = parse_batch_custom_id(cid)
                     except ValueError:
                         continue
                     if kind not in ("spotpg", "spot"):
                         continue
-                    results_by_page[page_num] = text
+                    results_by_chunk[(page_num, chunk_idx)] = text
                 for page_num in pages_with_spot:
-                    _apply_page_spot_results(page_num, results_by_page.get(page_num, ""))
+                    chunk_results: list[tuple[list[PatchOperation], list[str]]] = []
+                    for chunk_idx, chunk_ops in enumerate(
+                        _spot_chunks_for_page(page_num)
+                    ):
+                        raw_text = results_by_chunk.get((page_num, chunk_idx), "")
+                        _save_spot_raw_page_response(
+                            work_dir, page_num, raw_text, chunk_idx=chunk_idx
+                        )
+                        chunk_results.append(
+                            (
+                                chunk_ops,
+                                _parse_chunk_responses(chunk_ops, raw_text, page_num),
+                            )
+                        )
+                    _apply_page_spot_results(page_num, chunk_results)
             else:
                 for idx, page_num in enumerate(pages_with_spot, start=1):
                     if report:
@@ -1118,20 +1205,32 @@ def finalize_pipeline(
                             f"Spot-check page {page_num} ({idx}/{len(pages_with_spot)})…",
                         )
                     reqs = sorted(by_page[page_num], key=lambda r: r.operation.op_index)
-                    try:
-                        raw = _post_message(
-                            api_key,
-                            build_page_spot_patch_params(
-                                reqs[0].image_path,
-                                model,
-                                _ops_for_page(page_num),
-                                lang_cfg,
-                                section_hint=page_section_hint(state, page_num),
-                            ),
+                    hint = page_section_hint(state, page_num)
+                    page_chunks = _spot_chunks_for_page(page_num)
+                    chunk_results = []
+                    for chunk_idx, chunk_ops in enumerate(page_chunks):
+                        try:
+                            raw = _post_message(
+                                api_key,
+                                build_page_spot_patch_params(
+                                    reqs[0].image_path,
+                                    model,
+                                    chunk_ops,
+                                    lang_cfg,
+                                    section_hint=hint,
+                                ),
+                            )
+                        except RuntimeError:
+                            raw = ""
+                        _save_spot_raw_page_response(
+                            work_dir, page_num, raw, chunk_idx=chunk_idx
                         )
-                    except RuntimeError:
-                        raw = ""
-                    _apply_page_spot_results(page_num, raw)
+                        chunk_results.append(
+                            (chunk_ops, _parse_chunk_responses(chunk_ops, raw, page_num))
+                        )
+                        if chunk_idx + 1 < len(page_chunks):
+                            time.sleep(API_DELAY_SEC)
+                    _apply_page_spot_results(page_num, chunk_results)
                     time.sleep(API_DELAY_SEC)
             save_state(work_dir, state)
 

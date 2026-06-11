@@ -150,9 +150,24 @@ def transcription_user_prompt(work_dir: Path | None = None, state: dict | None =
     profile = (st or {}).get("detected_source_profile") or {}
     if not rules:
         rules = profile.get("normalization_rules") or ""
+    from pdf_transcribe_lang import (
+        job_language_config_from_state,
+        macron_tilde_prompt_line,
+        notation_prompt_line,
+    )
+
+    notation_parts = [notation_prompt_line()]
+    if st:
+        cfg = job_language_config_from_state(st)
+        if cfg.unify_abbreviation_marks:
+            notation_parts.append(macron_tilde_prompt_line())
+    notation = "\n".join(notation_parts)
     if rules:
-        return f"{base}\n\nLanguage-specific archival rules (auto-detected):\n{rules}"
-    return base
+        return (
+            f"{base}\n\nLanguage-specific archival rules (auto-detected):\n{rules}\n\n"
+            f"Notation: {notation}"
+        )
+    return f"{base}\n\nNotation: {notation}"
 
 
 def skip_line(reason: str) -> str:
@@ -168,7 +183,13 @@ def is_skip_body(text: str) -> bool:
     return bool(SKIP_LINE_RE.match(t)) or t.startswith("[Skipped:")
 
 
-def normalize_transcription_output(text: str) -> str:
+def normalize_transcription_output(text: str, lang_cfg=None, *, section: str | None = None) -> str:
+    from pdf_transcribe_lang import (
+        normalize_notation_tier1,
+        should_apply_tier2_unification,
+        unify_abbreviation_marks_tier2,
+    )
+
     t = text.strip()
     if not t or looks_like_chatter(t):
         return skip_line("blank page")
@@ -179,6 +200,9 @@ def normalize_transcription_output(text: str) -> str:
         return skip_line("Google boilerplate")
     if "library" in lower and "stamp" in lower and len(t) < 120:
         return skip_line("library stamp")
+    t = normalize_notation_tier1(t)
+    if should_apply_tier2_unification(lang_cfg, section=section):
+        t = unify_abbreviation_marks_tier2(t)
     return t
 
 
@@ -424,6 +448,19 @@ def load_state(work_dir: Path) -> dict:
     return {}
 
 
+def load_progress(work_dir: Path) -> dict | None:
+    path = progress_path(work_dir)
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+        if not text:
+            return None
+        return json.loads(text)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def save_state(work_dir: Path, state: dict) -> None:
     work_dir.mkdir(parents=True, exist_ok=True)
     state_path(work_dir).write_text(json.dumps(state, indent=2), encoding="utf-8")
@@ -459,7 +496,10 @@ def write_progress(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     work_dir.mkdir(parents=True, exist_ok=True)
-    progress_path(work_dir).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    path = progress_path(work_dir)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def resolve_processing_mode(mode: str | None, *, max_pages: int | None) -> str:
@@ -702,7 +742,9 @@ def spot_check_custom_id(page_num: int, op_index: int = 0) -> str:
     return f"spot_p{page_num:04d}_{op_index:02d}"
 
 
-def spot_page_custom_id(page_num: int) -> str:
+def spot_page_custom_id(page_num: int, chunk_idx: int = 0) -> str:
+    if chunk_idx:
+        return f"spotpg_p{page_num:04d}_{chunk_idx:02d}"
     return f"spotpg_p{page_num:04d}"
 
 
@@ -718,9 +760,9 @@ def parse_batch_custom_id(custom_id: str) -> tuple[str, int, int]:
     match = re.match(r"^rec_p(\d+)$", custom_id)
     if match:
         return "reconcile", 0, int(match.group(1))
-    match = re.match(r"^spotpg_p(\d+)$", custom_id)
+    match = re.match(r"^spotpg_p(\d+)(?:_(\d+))?$", custom_id)
     if match:
-        return "spotpg", 0, int(match.group(1))
+        return "spotpg", int(match.group(2) or 0), int(match.group(1))
     match = re.match(r"^p4_p(\d+)$", custom_id)
     if match:
         return "pass4", 0, int(match.group(1))
@@ -780,12 +822,13 @@ def build_vision_message_params(
     model: str,
     *,
     user_text: str | None = None,
+    max_tokens: int | None = None,
 ) -> dict:
     b64 = image_to_base64_jpeg(image_path)
     return {
         "model": model,
         "system": SYSTEM_PROMPT,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": max_tokens if max_tokens is not None else MAX_TOKENS,
         "messages": [
             {
                 "role": "user",
@@ -999,6 +1042,19 @@ def write_page_result(
     page_num: int,
     text: str,
 ) -> None:
+    from pdf_transcribe_source import classify_page_section, page_section_hint
+
+    lang_cfg = job_config_from_state(state)
+    section: str | None = None
+    if not is_skip_body(text):
+        if run == 1:
+            profile = state.get("detected_source_profile") or {}
+            langs = profile.get("languages") or {}
+            section = classify_page_section(text, langs)
+            state.setdefault("page_sections", {})[str(page_num)] = section
+        else:
+            section = page_section_hint(state, page_num)
+    text = normalize_transcription_output(text, lang_cfg, section=section)
     out_page = page_transcript_path(work_dir, run, page_num)
     out_page.parent.mkdir(parents=True, exist_ok=True)
     out_page.write_text(text, encoding="utf-8")
@@ -1212,10 +1268,12 @@ def pages_disagree(body1: str, body2: str) -> bool:
     return body1.strip() != body2.strip()
 
 
-def pages_need_content_reconcile(body1: str, body2: str) -> bool:
+def pages_need_content_reconcile(
+    body1: str, body2: str, lang_cfg=None, *, section: str | None = None
+) -> bool:
     from pdf_transcribe_lang import pages_need_content_reconcile as _need
 
-    return _need(body1, body2)
+    return _need(body1, body2, lang_cfg, section=section)
 
 
 def build_reconcile_params(
@@ -1235,6 +1293,16 @@ def build_reconcile_params(
         "Do not use logical reasoning to pick the more plausible reading. "
         "The image is ground truth, not plausibility.\n\n"
         "Transcribe exactly what is printed. Never correct anything. Never normalize anything.\n"
+        "Decorative drop capitals at chapter openings are part of the first word — include them "
+        '(e.g. "COMO", never "OMO").\n'
+    )
+    from pdf_transcribe_lang import macron_tilde_prompt_line, notation_prompt_line
+
+    notation_parts = [notation_prompt_line()]
+    if lang_cfg is not None and getattr(lang_cfg, "unify_abbreviation_marks", False):
+        notation_parts.append(macron_tilde_prompt_line())
+    user_text += f"Notation: {' '.join(notation_parts)}\n\n"
+    user_text += (
         f"{ARCHIVAL_VERBATIM}\n\n"
         "If the source image shows something that appears to be a printing error, "
         "inconsistency, or unusual convention, transcribe it exactly as it appears on the page. "
@@ -1293,7 +1361,7 @@ def build_page_spot_patch_params(
     *,
     section_hint: str | None = None,
 ) -> dict:
-    from pdf_transcribe_spot import build_page_patch_prompt
+    from pdf_transcribe_spot import build_page_patch_prompt, page_spot_output_max_tokens
 
     return build_vision_message_params(
         image_path,
@@ -1301,10 +1369,13 @@ def build_page_spot_patch_params(
         user_text=build_page_patch_prompt(
             operations, lang_cfg, section_hint=section_hint
         ),
+        max_tokens=page_spot_output_max_tokens(operations),
     )
 
 
-def parse_reconcile_output(text: str) -> tuple[str, bool, str]:
+def parse_reconcile_output(
+    text: str, lang_cfg=None, *, section: str | None = None
+) -> tuple[str, bool, str]:
     uncertain = False
     note = ""
     match = UNCERTAIN_RE.search(text)
@@ -1312,7 +1383,7 @@ def parse_reconcile_output(text: str) -> tuple[str, bool, str]:
         uncertain = True
         note = match.group(1).strip()
         text = UNCERTAIN_RE.sub("", text).strip()
-    return normalize_transcription_output(text), uncertain, note
+    return normalize_transcription_output(text, lang_cfg, section=section), uncertain, note
 
 
 def page_needs_hard_term_spot_check(text: str, terms: list[str], lang_cfg=None) -> bool:
@@ -1410,6 +1481,19 @@ def _init_transcription_job(
     )
     state = healed_state if healed_state else load_state(work_dir)
     if state.get("pdf") != job_sig["pdf"] or state.get("page_numbers") != job_sig["page_numbers"]:
+        profile_preserve = {
+            k: state[k]
+            for k in (
+                "detected_source_profile",
+                "normalization_rules",
+                "hard_terms_file",
+                "impossible_strings_file",
+                "seed_hard_terms",
+                "accuracy_notes",
+                "direction",
+            )
+            if k in state and state[k]
+        }
         state = {
             "pdf": job_sig["pdf"],
             "total_pages": page_range.job_page_count,
@@ -1430,6 +1514,7 @@ def _init_transcription_job(
             "reconcile": {"completed": []},
             "spot_check": {"completed": []},
         }
+        state.update(profile_preserve)
         save_state(work_dir, state)
     else:
         state["total_pages"] = page_range.job_page_count

@@ -4,6 +4,7 @@
     "direction": "ltr",
     "hyphenation_join": true,
     "emphasis": "asterisk",
+    "meaningful_diacritics": false,
     "normalization_rule": "Do not normalize old Spanish spelling — fué, á, hácia, substituído, inédita are correct as printed. Never modernize these forms."
   },
   "nahuatl": {
@@ -11,6 +12,7 @@
     "direction": "ltr",
     "hyphenation_join": true,
     "emphasis": "asterisk",
+    "meaningful_diacritics": true,
     "normalization_rule": "Do not normalize long vowel markers. Āā, Ēē, Īī, Ōō with macrons are semantically meaningful and must be preserved exactly. Do not substitute unmarked vowels for marked ones."
   },
   "korean": {
@@ -18,6 +20,7 @@
     "direction": "ltr",
     "hyphenation_join": false,
     "emphasis": "none",
+    "meaningful_diacritics": true,
     "normalization_rule": "Do not normalize hanja characters to hangul equivalents. Do not modernize historical hangul orthography. Classical Korean texts may use spelling conventions that differ from modern Korean — transcribe exactly what is printed."
   },
   "japanese": {
@@ -25,6 +28,7 @@
     "direction": "ltr",
     "hyphenation_join": false,
     "emphasis": "japanese_quotes",
+    "meaningful_diacritics": true,
     "normalization_rule": "Do not normalize historical kana orthography to modern spelling. ゐ and ゑ are valid historical characters not errors. Do not substitute modern equivalents. Do not convert classical grammar forms to modern equivalents."
   },
   "arabic": {
@@ -32,6 +36,31 @@
     "direction": "rtl",
     "hyphenation_join": false,
     "emphasis": "double_asterisk",
+    "meaningful_diacritics": true,
     "normalization_rule": "Do not normalize classical Arabic to modern standard Arabic. Do not add or remove diacritical marks (tashkeel) that are not present in the source. Connected letter forms must be preserved — do not substitute isolated forms."
+  },
+  "kaqchikel": {
+    "script": "latin",
+    "direction": "ltr",
+    "hyphenation_join": true,
+    "emphasis": "asterisk",
+    "meaningful_diacritics": true,
+    "normalization_rule": "Do not normalize colonial Kaqchikel Maya orthography. Transcribe exactly what is printed, never standardize to modern unified Maya orthography."
+  },
+  "yucatec_maya": {
+    "script": "latin",
+    "direction": "ltr",
+    "hyphenation_join": true,
+    "emphasis": "asterisk",
+    "meaningful_diacritics": true,
+    "normalization_rule": "Do not normalize classical Maya orthography. Glottal stops and special characters are phonemically meaningful — preserve exactly."
+  },
+  "classical_maya": {
+    "script": "latin",
+    "direction": "ltr",
+    "hyphenation_join": true,
+    "emphasis": "asterisk",
+    "meaningful_diacritics": true,
+    "normalization_rule": "Colonial-era Maya texts use inconsistent Spanish-influenced spelling — transcribe exactly as printed, never standardize."
   }
 }

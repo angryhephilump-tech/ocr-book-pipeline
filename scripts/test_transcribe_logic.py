@@ -29,10 +29,16 @@ from pdf_transcribe_lang import (  # noqa: E402
     build_normalization_rules_text,
     filter_terms_by_min_occurrences,
     job_language_config,
+    job_language_config_from_state,
     load_impossible_strings,
+    canonicalize_superscript_notation,
+    normalize_notation_tier1,
     pages_need_content_reconcile,
+    resolve_unify_abbreviation_marks,
+    unify_macron_to_tilde,
     strip_whitespace_for_compare,
     term_present_in_text,
+    unify_abbreviation_marks_tier2,
 )
 from pdf_transcribe_sanity import (  # noqa: E402
     check_page_sanity,
@@ -60,8 +66,11 @@ from pdf_transcribe_spot import (  # noqa: E402
     build_page_patch_prompt,
     cap_patch_operations,
     collect_patch_operations,
+    estimate_spot_output_tokens,
+    page_spot_output_max_tokens,
     parse_page_patch_response,
     sentence_contains_hard_terms,
+    split_patch_operations_by_token_budget,
     validate_patch_response,
 )
 
@@ -84,6 +93,173 @@ def test_content_reconcile_skip() -> None:
     assert strip_whitespace_for_compare(a) == strip_whitespace_for_compare(b)
     c = "Hola mundo.\nSegunda línea."
     assert pages_need_content_reconcile(a, c)
+
+
+def test_unify_abbreviation_marks_default_false() -> None:
+    cfg = job_language_config("spanish", "ixtlilxochitl")
+    assert cfg.unify_abbreviation_marks is False
+
+
+def test_historia_spanish_only_unify_on() -> None:
+    state = {
+        "source_name": "historiaverdade03castgoog_part_2",
+        "source_id": "historiaverdade03castgoog_part_2",
+        "language": "spanish",
+        "script": "latin",
+        "detected_source_profile": {
+            "languages": {"spanish": 1.0},
+            "confirmed": True,
+        },
+    }
+    cfg = job_language_config_from_state(state)
+    assert cfg.unify_abbreviation_marks is True
+
+
+def test_anales_mixed_forces_unify_off() -> None:
+    state = {
+        "source_name": "anales_de_tlatelolco",
+        "source_id": "anales_de_tlatelolco",
+        "language": "spanish",
+        "script": "latin",
+        "detected_source_profile": {
+            "languages": {"spanish": 0.7, "nahuatl": 0.3},
+            "unify_abbreviation_marks": True,
+            "confirmed": True,
+        },
+        "unify_abbreviation_marks": True,
+    }
+    assert resolve_unify_abbreviation_marks(state, state["detected_source_profile"]) is False
+    cfg = job_language_config_from_state(state)
+    assert cfg.unify_abbreviation_marks is False
+    assert cfg.language == "spanish"
+
+
+def test_notation_tier1_html_and_caret() -> None:
+    assert normalize_notation_tier1("ver nota<sup>1</sup> aquí") == "ver nota¹ aquí"
+    assert normalize_notation_tier1("capítulo N^o 5") == "capítulo Nº 5"
+    assert normalize_notation_tier1("ref^12 al pie") == "ref¹² al pie"
+
+
+def test_canonicalize_superscript_ordinal_after_letter() -> None:
+    assert canonicalize_superscript_notation("rresçebimiº") == "rresçebimiᵒ"
+    assert canonicalize_superscript_notation("rresçebimiᵒ") == "rresçebimiᵒ"
+    assert normalize_notation_tier1("rresçebimiº") == "rresçebimiᵒ"
+    assert pt.normalize_transcription_output("rresçebimiº") == "rresçebimiᵒ"
+    assert canonicalize_superscript_notation("capítulo Nº 5") == "capítulo Nº 5"
+    a = "rresçebimiº en el texto."
+    b = "rresçebimiᵒ en el texto."
+    assert not pages_need_content_reconcile(a, b)
+
+
+def test_macron_to_tilde_when_flag_on() -> None:
+    cfg = job_language_config(
+        "spanish", "historiaverdade03castgoog_part_2", unify_abbreviation_marks=True
+    )
+    q_macron = "q\u0304"
+    q_tilde = "q\u0303"
+    assert unify_macron_to_tilde(f"por{q_macron}") == f"por{q_tilde}"
+    assert pt.normalize_transcription_output(f"palabra {q_macron} fin", cfg) == (
+        f"palabra {q_tilde} fin"
+    )
+    assert pt.normalize_transcription_output("vocālis", cfg) == "vocãlis"
+    assert pt.normalize_transcription_output("ēcho", cfg) == "ẽcho"
+
+
+def test_macron_to_tilde_when_flag_off() -> None:
+    cfg = job_language_config("spanish", "ixtlilxochitl", unify_abbreviation_marks=False)
+    q_macron = "q\u0304"
+    raw = f"palabra {q_macron} y vocālis"
+    assert pt.normalize_transcription_output(raw, cfg) == raw
+
+
+def test_nahuatl_macrons_protected_by_override() -> None:
+    state = {
+        "source_name": "anales_de_tlatelolco",
+        "source_id": "anales_de_tlatelolco",
+        "language": "spanish",
+        "script": "latin",
+        "detected_source_profile": {
+            "languages": {"spanish": 0.7, "nahuatl": 0.3},
+            "unify_abbreviation_marks": True,
+            "confirmed": True,
+        },
+        "unify_abbreviation_marks": True,
+    }
+    cfg = job_language_config_from_state(state)
+    assert cfg.unify_abbreviation_marks is False
+    raw = "Tenōchtitlan Āltepētl q\u0304"
+    assert pt.normalize_transcription_output(raw, cfg) == raw
+
+
+def test_macron_tilde_superscript_digits_untouched() -> None:
+    cfg = job_language_config("spanish", "test", unify_abbreviation_marks=True)
+    raw = "mx⁰⁰ y más"
+    assert pt.normalize_transcription_output(raw, cfg) == raw
+
+
+def test_macron_tilde_no_reconcile_when_unify_on() -> None:
+    cfg = job_language_config("spanish", "test", unify_abbreviation_marks=True)
+    q_macron = "q\u0304"
+    q_tilde = "q\u0303"
+    a = f"por{q_macron} el camino."
+    b = f"por{q_tilde} el camino."
+    assert pt.pages_disagree(a, b)
+    assert not pages_need_content_reconcile(a, b, cfg)
+
+
+def test_tier2_section_gating_spanish_vs_paleographic() -> None:
+    from pdf_transcribe_lang import (
+        section_skips_tier2_unification,
+        should_apply_tier2_unification,
+    )
+
+    cfg = job_language_config(
+        "spanish", "historiaverdade03castgoog_part_2", unify_abbreviation_marks=True
+    )
+    q_macron = "q\u0304"
+    q_tilde = "q\u0303"
+
+    assert not section_skips_tier2_unification("spanish_translation")
+    assert section_skips_tier2_unification("paleographic_nahuatl")
+    assert should_apply_tier2_unification(cfg, section="spanish_translation")
+    assert not should_apply_tier2_unification(cfg, section="paleographic_nahuatl")
+
+    assert pt.normalize_transcription_output(
+        f"por{q_macron}", cfg, section="spanish_translation"
+    ) == f"por{q_tilde}"
+    raw = f"por{q_macron} [Nican moteneu] Ācatl"
+    assert pt.normalize_transcription_output(raw, cfg, section="paleographic_nahuatl") == raw
+    assert (
+        pt.normalize_transcription_output("rresçebimiº", cfg, section="paleographic_nahuatl")
+        == "rresçebimiᵒ"
+    )
+
+    a = f"por{q_macron} el camino."
+    b = f"por{q_tilde} el camino."
+    assert not pages_need_content_reconcile(a, b, cfg, section="spanish_translation")
+
+
+def test_notation_tier2_unify_spanish_abbreviations() -> None:
+    cfg = job_language_config("spanish", "test", unify_abbreviation_marks=True)
+    raw = "El N.o 3 y la M.a reina."
+    out = pt.normalize_transcription_output(raw, cfg)
+    assert "\u00ba" in out  # Nº masculine ordinal
+    assert "\u00aa" in out  # Mª feminine ordinal
+
+
+def test_notation_only_no_reconcile() -> None:
+    a = "Texto con N^o 5 y nota<sup>1</sup> al final."
+    b = "Texto con Nº 5 y nota¹ al final."
+    cfg = job_language_config("spanish", "historiaverdade03castgoog_part_2", unify_abbreviation_marks=True)
+    assert pt.pages_disagree(a, b)
+    assert not pages_need_content_reconcile(a, b, cfg)
+    c = "Texto con Nº 6 y nota¹ al final."
+    assert pages_need_content_reconcile(a, c, cfg)
+
+
+def test_normalize_transcription_output_tier1_without_lang_cfg() -> None:
+    out = pt.normalize_transcription_output("ver <sup>2</sup> aquí")
+    assert out == "ver ² aquí"
 
 
 def test_reconcile_pass4_third_reading() -> None:
@@ -230,8 +406,11 @@ def test_build_page_patch_prompt() -> None:
     assert "2. [Moquíhuix] en Tenochtitlan." in prompt
     assert "Nezahualcoyotl, Texcoco" in prompt
     assert "Moquíhuix" in prompt
-    assert "EXACTLY 2 line" in prompt
-    assert "modern Spanish translation" in prompt
+    assert "EXACTLY 2 numbered sentence" in prompt
+    assert "one single line" in prompt
+    assert "Reproduce each sentence in full" in prompt
+    assert "Spanish narrative section" in prompt
+    assert "not paleographic Nahuatl" in prompt
 
 
 def test_parse_page_patch_response() -> None:
@@ -252,6 +431,72 @@ def test_parse_page_patch_response() -> None:
     garbage = "I cannot verify these sentences."
     out4 = parse_page_patch_response(garbage, 2, originals)
     assert out4 == originals
+
+    wrapped = (
+        "1: Esta es una oración colonial muy larga que el modelo\n"
+        "decidió envolver en varias líneas sin puntuación final\n"
+        "2: Segunda oración corta."
+    )
+    out5 = parse_page_patch_response(wrapped, 2, originals)
+    assert out5[0] == (
+        "Esta es una oración colonial muy larga que el modelo "
+        "decidió envolver en varias líneas sin puntuación final"
+    )
+    assert out5[1] == "Segunda oración corta."
+
+    long_sentence = "A" * 9000
+    long_originals = [long_sentence, "tail."]
+    truncated = f"1: {long_sentence[:1200]}"
+    out6 = parse_page_patch_response(truncated, 2, long_originals)
+    assert out6[0] == long_sentence[:1200]
+    assert out6[1] == long_originals[1]
+
+    dotted = "1. Alpha UNO.\n2. Beta DOS."
+    out7 = parse_page_patch_response(dotted, 2, originals)
+    assert out7 == ["Alpha UNO.", "Beta DOS."]
+
+
+def test_spot_token_budget_helpers() -> None:
+    short_ops = [
+        PatchOperation(
+            section="body",
+            start=0,
+            end=10,
+            sentence="Corto.",
+            terms=("Corto",),
+            bracketed_sentence="[Corto].",
+            op_index=0,
+        )
+    ]
+    assert estimate_spot_output_tokens(["Corto."]) == len("Corto.") // 3 + 512
+    assert page_spot_output_max_tokens(short_ops) >= 256
+    assert split_patch_operations_by_token_budget(short_ops) == [short_ops]
+
+    long_ops = [
+        PatchOperation(
+            section="body",
+            start=0,
+            end=5000,
+            sentence="X" * 5000,
+            terms=("X",),
+            bracketed_sentence="[X]" + "X" * 4999,
+            op_index=0,
+        ),
+        PatchOperation(
+            section="body",
+            start=5000,
+            end=10000,
+            sentence="Y" * 5000,
+            terms=("Y",),
+            bracketed_sentence="[Y]" + "Y" * 4999,
+            op_index=1,
+        ),
+    ]
+    chunks = split_patch_operations_by_token_budget(long_ops, max_output_tokens=3000)
+    assert len(chunks) >= 2
+    assert sum(len(c) for c in chunks) == 2
+    assert pt.spot_page_custom_id(42, 1) == "spotpg_p0042_01"
+    assert pt.parse_batch_custom_id("spotpg_p0042_01") == ("spotpg", 1, 42)
 
 
 def test_work_page_range() -> None:
@@ -558,6 +803,16 @@ def test_classify_anales_pilot_page_pattern() -> None:
         assert classify_page_section(body) == expected[num], f"page {num}"
 
 
+def test_classify_archaic_spanish_not_paleographic() -> None:
+    """Regression: colonial Spanish (ç, q̄) must not be tagged paleographic_nahuatl."""
+    q_macron = "q\u0304"
+    archaic = (
+        f"COMO abian venido alli a tezcuco por{q_macron} el señor de la çiudad "
+        "çerto çaminos y açordaron que los mexicas avian de yr a la guerra."
+    )
+    assert classify_page_section(archaic) == "spanish_translation"
+
+
 def test_integrity_heal_stale_state() -> None:
     from pdf_transcribe_integrity import heal_stale_state
 
@@ -621,6 +876,32 @@ def test_spot_patch_rejection_check() -> None:
     ok2, detail2 = spot_patch_rejection_check_ok(wd, stats2)
     assert not ok2
     assert "blocked" in detail2
+
+
+def test_spot_patch_rejection_check_current_run_pages_only() -> None:
+    from pdf_transcribe_integrity import spot_patch_rejection_check_ok
+
+    wd = Path(tempfile.mkdtemp())
+    log = wd / "spot_patch_log.txt"
+    log.write_text(
+        "Page 13\n"
+        "  op 0: REJECTED (unchanged) (body) [a]\n"
+        "  op 1: REJECTED (unchanged) (body) [b]\n"
+        "Page 24\n"
+        "  op 0: REJECTED (unchanged) (body) [c]\n"
+        "  op 1: REJECTED (impossible_string) (body) [d]\n",
+        encoding="utf-8",
+    )
+    stats = {
+        "spot_patches_applied": 2,
+        "spot_patches_rejected": 3,
+        "page_numbers": list(range(23, 33)),
+    }
+    ok, detail = spot_patch_rejection_check_ok(wd, stats)
+    assert ok
+    assert "other: -" not in detail
+    assert "unchanged (already correct): 1" in detail
+    assert "impossible_string (blocked): 1" in detail
 
 
 def test_source_lock_blocks_mismatch() -> None:
@@ -755,6 +1036,20 @@ def main() -> int:
         test_skip_format,
         test_pages_disagree,
         test_content_reconcile_skip,
+        test_unify_abbreviation_marks_default_false,
+        test_historia_spanish_only_unify_on,
+        test_anales_mixed_forces_unify_off,
+        test_notation_tier1_html_and_caret,
+        test_canonicalize_superscript_ordinal_after_letter,
+        test_macron_to_tilde_when_flag_on,
+        test_macron_to_tilde_when_flag_off,
+        test_nahuatl_macrons_protected_by_override,
+        test_macron_tilde_superscript_digits_untouched,
+        test_macron_tilde_no_reconcile_when_unify_on,
+        test_tier2_section_gating_spanish_vs_paleographic,
+        test_notation_tier2_unify_spanish_abbreviations,
+        test_notation_only_no_reconcile,
+        test_normalize_transcription_output_tier1_without_lang_cfg,
         test_reconcile_pass4_third_reading,
         test_document_term_index_cache,
         test_pass4_batch_resolve_missing_result,
@@ -766,6 +1061,7 @@ def main() -> int:
         test_parse_batch_ids,
         test_build_page_patch_prompt,
         test_parse_page_patch_response,
+        test_spot_token_budget_helpers,
         test_work_page_range,
         test_chatter_to_skip,
         test_bracket_terms,
@@ -791,8 +1087,10 @@ def main() -> int:
         test_patch_cap,
         test_classify_page_section,
         test_classify_anales_pilot_page_pattern,
+        test_classify_archaic_spanish_not_paleographic,
         test_resolve_source_slug_hint,
         test_spot_patch_rejection_check,
+        test_spot_patch_rejection_check_current_run_pages_only,
         test_integrity_heal_stale_state,
         test_impossible_strings_source_header,
         test_source_lock_blocks_mismatch,

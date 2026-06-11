@@ -41,6 +41,19 @@ let workDir = null;
 let pollTimer = null;
 let editMode = false;
 let resumeChoiceMode = false;
+let autoProceedSent = false;
+
+const SESSION_WORK_DIR_KEY = "pdf_transcribe_work_dir";
+
+function persistWorkDir(dir) {
+  workDir = dir;
+  if (dir) sessionStorage.setItem(SESSION_WORK_DIR_KEY, dir);
+  else sessionStorage.removeItem(SESSION_WORK_DIR_KEY);
+}
+
+function workDirQuery() {
+  return workDir ? `?work_dir=${encodeURIComponent(workDir)}` : "";
+}
 
 const CONFIRM_YES_DEFAULT = "Yes, proceed";
 const CONFIRM_YES_RESUME = "Resume existing job";
@@ -300,9 +313,17 @@ sourceNameInput?.addEventListener("input", () => {
   refreshPilotGate();
 });
 workDirInput?.addEventListener("input", updateWorkDirHint);
+workDirInput?.addEventListener("change", () => {
+  const val = workDirInput.value.trim();
+  if (val) {
+    persistWorkDir(val);
+    restoreSessionJob();
+  }
+});
 fileInput.addEventListener("change", updateWorkDirHint);
 
 loadKeyStatus();
+restoreSessionJob();
 
 function setFile(file) {
   if (!file) return;
@@ -450,7 +471,7 @@ function hideConfirmPanel() {
 
 async function fetchProfile() {
   try {
-    const res = await fetch("/api/profile");
+    const res = await fetch(`/api/profile${workDirQuery()}`);
     return await parseApiResponse(res);
   } catch (_) {
     return { ready: false };
@@ -459,19 +480,33 @@ async function fetchProfile() {
 
 async function pollProgress() {
   try {
-    const res = await fetch("/api/progress");
+    const res = await fetch(`/api/progress${workDirQuery()}`);
     const data = await parseApiResponse(res);
-    if (data.work_dir) workDir = data.work_dir;
+    if (data.work_dir) persistWorkDir(data.work_dir);
 
     if (data.awaiting_confirm || data.phase === "awaiting_confirm") {
       const prof = await fetchProfile();
-      if (
-        prof.ready &&
-        (prof.needs_confirmation || prof.needs_resume_choice || prof.has_existing_work)
-      ) {
-        showConfirmPanel(prof.lines || [], prof.from_saved, prof);
-        return;
+      if (prof.ready) {
+        if (
+          prof.needs_confirmation ||
+          prof.needs_resume_choice ||
+          prof.has_existing_work
+        ) {
+          showConfirmPanel(prof.lines || [], prof.from_saved, prof);
+          return;
+        }
+        if (!data.running && !autoProceedSent) {
+          autoProceedSent = true;
+          await sendConfirm("yes");
+          return;
+        }
       }
+      showConfirmPanel(
+        prof.lines || ["Review detected settings, then proceed."],
+        prof.from_saved,
+        { ...prof, needs_confirmation: true }
+      );
+      return;
     }
 
     if (data.phase !== "awaiting_confirm") {
@@ -513,6 +548,7 @@ async function pollProgress() {
 
     if (data.phase === "done") {
       clearInterval(pollTimer);
+      sessionStorage.removeItem(SESSION_WORK_DIR_KEY);
       setFormLocked(false);
       startBtn.disabled = false;
       openFolderBtn.disabled = false;
@@ -534,7 +570,34 @@ async function pollProgress() {
   }
 }
 
+async function restoreSessionJob() {
+  const saved =
+    sessionStorage.getItem(SESSION_WORK_DIR_KEY) || workDirInput?.value.trim() || "";
+  if (!saved) return;
+  try {
+    const res = await fetch(`/api/progress?work_dir=${encodeURIComponent(saved)}`);
+    const data = await parseApiResponse(res);
+    if (data.phase === "idle" || data.phase === "done") {
+      sessionStorage.removeItem(SESSION_WORK_DIR_KEY);
+      return;
+    }
+    persistWorkDir(saved);
+    if (workDirInput && !workDirInput.value.trim()) workDirInput.value = saved;
+    setFormLocked(true);
+    startBtn.disabled = true;
+    openFolderBtn.disabled = false;
+    resetSourceBtn.disabled = false;
+    progressPanel.classList.remove("hidden");
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(pollProgress, 1200);
+    pollProgress();
+  } catch (_) {
+    sessionStorage.removeItem(SESSION_WORK_DIR_KEY);
+  }
+}
+
 async function startPrepare() {
+  autoProceedSent = false;
   resetConfirmUi();
   errEl.classList.add("hidden");
   donePanel.classList.add("hidden");
@@ -591,7 +654,7 @@ async function startPrepare() {
     if ((data.error || "").includes("key")) showKeyForm(true);
     return;
   }
-  workDir = data.work_dir;
+  persistWorkDir(data.work_dir);
   openFolderBtn.disabled = false;
   resetSourceBtn.disabled = false;
   showConfigStatus(data.integrity, data.folder_warning);

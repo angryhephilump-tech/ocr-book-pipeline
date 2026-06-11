@@ -547,13 +547,25 @@ class PilotCheck:
 _REJECT_REASON_RE = re.compile(r"REJECTED\s+\(([^)]+)\)")
 
 
-def parse_spot_patch_rejection_stats(work_dir: Path) -> dict[str, int]:
+def parse_spot_patch_rejection_stats(
+    work_dir: Path,
+    *,
+    page_numbers: set[int] | None = None,
+) -> dict[str, int]:
     """Count spot-patch rejections by reason from spot_patch_log.txt."""
     path = work_dir / "spot_patch_log.txt"
     counts: dict[str, int] = {}
     if not path.is_file():
         return counts
+    current_page: int | None = None
     for line in path.read_text(encoding="utf-8").splitlines():
+        page_m = re.match(r"^Page\s+(\d+)\s*$", line.strip())
+        if page_m:
+            current_page = int(page_m.group(1))
+            continue
+        if page_numbers is not None:
+            if current_page is None or current_page not in page_numbers:
+                continue
         m = _REJECT_REASON_RE.search(line)
         if not m:
             continue
@@ -578,8 +590,10 @@ def spot_patch_rejection_check_ok(
     if total == 0:
         return True, "No patches"
 
-    by_reason = parse_spot_patch_rejection_stats(work_dir)
-    if not by_reason and rejected:
+    page_list = (stats or {}).get("page_numbers") or []
+    page_filter = set(page_list) if page_list else None
+    by_reason = parse_spot_patch_rejection_stats(work_dir, page_numbers=page_filter)
+    if not by_reason and rejected and not page_filter:
         by_reason = {"unknown": rejected}
 
     unchanged = by_reason.get("unchanged", 0)

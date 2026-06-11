@@ -1,0 +1,5 @@
+# Terms logged but not sent to spot-patch API (stable / zero historical fixes)
+cortes
+cu
+mexicanos
+tascaltecas

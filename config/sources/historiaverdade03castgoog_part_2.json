@@ -1,0 +1,34 @@
+{
+  "source_name": "historiaverdade03castgoog_part_2",
+  "detected_languages": {
+    "spanish": 1.0
+  },
+  "detected_script": "latin",
+  "detected_direction": "ltr",
+  "detected_era": "19th century printed (reproducing 16th century colonial text)",
+  "hard_terms_file": "hard_terms_auto_historiaverdade03castgoog_part_2.txt",
+  "impossible_strings_file": "impossible_auto_historiaverdade03castgoog_part_2.txt",
+  "soft_terms_file": "soft_terms_historiaverdade03castgoog_part_2.txt",
+  "normalization_rules_applied": [
+    "spanish"
+  ],
+  "unify_abbreviation_marks": true,
+  "footnotes": false,
+  "headers": true,
+  "page_sections": {
+    "23": "spanish_translation",
+    "24": "editorial_spanish",
+    "25": "spanish_translation",
+    "26": "editorial_spanish",
+    "27": "editorial_spanish",
+    "28": "spanish_translation",
+    "29": "spanish_translation",
+    "30": "spanish_translation",
+    "31": "spanish_translation",
+    "32": "spanish_translation"
+  },
+  "spelling_variation_notes": "",
+  "run_date": "2026-06-11",
+  "pages_processed": 10,
+  "accuracy_notes": ""
+}

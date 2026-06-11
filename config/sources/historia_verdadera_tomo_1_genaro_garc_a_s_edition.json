@@ -12,6 +12,7 @@
   "normalization_rules_applied": [
     "spanish"
   ],
+  "unify_abbreviation_marks": true,
   "footnotes": false,
   "headers": false,
   "page_sections": {

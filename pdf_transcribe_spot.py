@@ -56,9 +56,10 @@ _SECTION_HINTS: dict[str, str] = {
         "Do not apply modern Spanish accent normalization.\n"
     ),
     "spanish_translation": (
-        "This page is a modern Spanish translation section — use modern Spanish "
-        "orthography for proper names (accents as in the edition). "
-        "Do not preserve colonial Nahuatl spellings on this page.\n"
+        "This page is a Spanish narrative section (colonial or modern translation). "
+        "Archaic Spanish orthography (ç, q̄/q̃ abbreviation strokes, missing accents) "
+        "is still Spanish — not paleographic Nahuatl. "
+        "Use edition-appropriate Spanish for proper names; do not apply Nahuatl macron rules.\n"
     ),
     "editorial_spanish": (
         "This page is editorial/front matter in modern Spanish.\n"
@@ -139,18 +140,66 @@ def build_page_patch_prompt(
     lines.append("")
     lines.append(_patch_instruction_block(lang_cfg))
     lines.append(
-        f"— Return EXACTLY {len(sorted_ops)} line(s), one per sentence, in this format:\n"
+        f"— Return EXACTLY {len(sorted_ops)} numbered sentence(s), in this format:\n"
         "  N: <corrected sentence with brackets removed>\n"
+        "— Put each numbered sentence on one single line — do not wrap or break lines\n"
+        "— Reproduce each sentence in full; never truncate or omit text\n"
         "— Use the same numbering (1, 2, …) and order as given above\n"
         "— Return nothing else — no explanation, no preamble, no extra lines"
     )
     return "\n".join(lines)
 
 
-_PAGE_PATCH_LINE_RE = re.compile(
-    r"^\s*(\d+)\s*[):.\-]\s*(.+?)\s*$",
+_PAGE_PATCH_MARKER_RE = re.compile(
+    r"^\s*(\d+)\s*[:.)]",
     re.MULTILINE,
 )
+
+SPOT_PAGE_CHARS_PER_TOKEN = 3
+SPOT_PAGE_OUTPUT_TOKEN_MARGIN = 512
+SPOT_PAGE_MAX_OUTPUT_TOKENS = 8192
+
+
+def estimate_spot_output_tokens(sentences: list[str]) -> int:
+    """Rough output token budget: ~1 token per 3 chars plus margin."""
+    total_chars = sum(len(s) for s in sentences)
+    return total_chars // SPOT_PAGE_CHARS_PER_TOKEN + SPOT_PAGE_OUTPUT_TOKEN_MARGIN
+
+
+def page_spot_output_max_tokens(operations: list[PatchOperation]) -> int:
+    """max_tokens for a page-level spot call, scaled to expected response size."""
+    sentences = [op.sentence for op in operations]
+    needed = estimate_spot_output_tokens(sentences)
+    return min(SPOT_PAGE_MAX_OUTPUT_TOKENS, max(256, needed))
+
+
+def split_patch_operations_by_token_budget(
+    operations: list[PatchOperation],
+    *,
+    max_output_tokens: int = SPOT_PAGE_MAX_OUTPUT_TOKENS,
+) -> list[list[PatchOperation]]:
+    """Split page ops into multiple API requests when output would exceed safe budget."""
+    if not operations:
+        return []
+    sorted_ops = sorted(operations, key=lambda op: op.op_index)
+    total = estimate_spot_output_tokens([op.sentence for op in sorted_ops])
+    if total <= max_output_tokens:
+        return [sorted_ops]
+
+    chunks: list[list[PatchOperation]] = []
+    current: list[PatchOperation] = []
+    current_tokens = SPOT_PAGE_OUTPUT_TOKEN_MARGIN
+    for op in sorted_ops:
+        op_tokens = max(1, len(op.sentence) // SPOT_PAGE_CHARS_PER_TOKEN)
+        if current and current_tokens + op_tokens > max_output_tokens:
+            chunks.append(current)
+            current = []
+            current_tokens = SPOT_PAGE_OUTPUT_TOKEN_MARGIN
+        current.append(op)
+        current_tokens += op_tokens
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def parse_page_patch_response(
@@ -165,14 +214,18 @@ def parse_page_patch_response(
     while len(fallback) < expected_count:
         fallback.append("")
     parsed: dict[int, str] = {}
-    for match in _PAGE_PATCH_LINE_RE.finditer(text or ""):
+    raw = text or ""
+    matches = list(_PAGE_PATCH_MARKER_RE.finditer(raw))
+    for i, match in enumerate(matches):
         try:
             idx = int(match.group(1))
         except ValueError:
             continue
         if idx < 1 or idx > expected_count or idx in parsed:
             continue
-        body = match.group(2).strip()
+        body_start = match.end()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(raw)
+        body = re.sub(r"\s+", " ", raw[body_start:body_end].strip())
         if body:
             parsed[idx] = body
     return [parsed.get(i + 1, fallback[i]) for i in range(expected_count)]

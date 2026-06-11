@@ -225,6 +225,8 @@ def apply_profile_to_state(state: dict, profile: dict, source_name: str) -> None
     state["script"] = script
     state["direction"] = direction
     state["normalization_rules"] = profile.get("normalization_rules") or ""
+    if "unify_abbreviation_marks" in profile:
+        state["unify_abbreviation_marks"] = bool(profile["unify_abbreviation_marks"])
     state["hard_terms_file"] = str(hard_terms_auto_path(slug))
     state["impossible_strings_file"] = str(impossible_auto_path(slug))
     state["seed_hard_terms"] = list(profile.get("seed_hard_terms") or [])
@@ -270,6 +272,8 @@ def load_saved_source_profile(source_name: str) -> dict | None:
         ),
         "normalization_languages": data.get("normalization_rules_applied") or [],
     }
+    if "unify_abbreviation_marks" in data:
+        profile["unify_abbreviation_marks"] = bool(data["unify_abbreviation_marks"])
     return profile
 
 

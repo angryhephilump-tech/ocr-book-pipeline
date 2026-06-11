@@ -25,6 +25,8 @@ Transcribe the editorial correction in the footnote exactly as printed.
 Do not merge them, do not fix the body text, do not add [sic] — the source itself is already handling it.
 
 Formatting:
+- Superscripts and ordinals: use Unicode superscript characters (¹²³⁴⁵⁶⁷⁸⁹⁰, º, ª), never HTML tags (<sup>…</sup>) or caret notation (^1, N^o).
+- Decorative drop capitals at chapter openings are part of the first word — include them (e.g. "COMO", never "OMO").
 - Copy every printed or stamped word exactly as shown.
 - Wrap italic text in *single asterisks*.
 - After the main body, if footnotes exist, add a line containing only --- FOOTNOTES --- then transcribe footnotes.
