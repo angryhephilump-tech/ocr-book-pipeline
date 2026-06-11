@@ -72,6 +72,35 @@ def slugify_source_name(name: str) -> str:
     return slug.strip("_") or "unknown"
 
 
+def _balanced_bracket_slice(text: str, open_ch: str, close_ch: str) -> str | None:
+    """Return the first balanced {...} or [...] slice without regex backtracking."""
+    idx = text.find(open_ch)
+    if idx < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(idx, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[idx : i + 1]
+    return None
+
+
 def _extract_json_blob(text: str) -> Any:
     text = text.strip()
     if text.startswith("```"):
@@ -80,12 +109,23 @@ def _extract_json_blob(text: str) -> Any:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        match = re.search(r"\{[\s\S]*\}", text)
-        if match:
-            return json.loads(match.group(0))
-        match = re.search(r"\[[\s\S]*\]", text)
-        if match:
-            return json.loads(match.group(0))
+        decoder = json.JSONDecoder()
+        for open_ch in "{[":
+            idx = text.find(open_ch)
+            if idx < 0:
+                continue
+            try:
+                obj, _end = decoder.raw_decode(text, idx)
+                return obj
+            except json.JSONDecodeError:
+                pass
+        for open_ch, close_ch in (("{", "}"), ("[", "]")):
+            blob = _balanced_bracket_slice(text, open_ch, close_ch)
+            if blob:
+                try:
+                    return json.loads(blob)
+                except json.JSONDecodeError:
+                    pass
         raise
 
 

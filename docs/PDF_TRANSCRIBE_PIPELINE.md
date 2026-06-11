@@ -1,5 +1,7 @@
 # PDF Transcribe Pipeline (v3)
 
+> **Canonical architecture reference:** [CLAUDE_ARCHITECTURE_REFERENCE.md](./CLAUDE_ARCHITECTURE_REFERENCE.md) — use that file as the single source of truth; this doc is an operator guide and may lag on implementation details.
+
 How the Claude Opus vision pipeline works, what each step does, and how to run it so you end up with clean text and fewer surprises.
 
 For the **whole repository** (Archive Studios + Gateway + shared `pipeline/`), see [ARCHITECTURE.md](./ARCHITECTURE.md).
@@ -183,6 +185,28 @@ Failed pages are **automatically re-run on the live API** (full price for those 
 - Uncertain pages get `UNCERTAIN: reason` and land in **human review** list
 
 **Typical causes of disagreements:** Nahuatl names, old Spanish accents, footnote numbers vs superscripts, faded ink, sideways pages.
+
+### Pass 4 cross-check (third-reading guard)
+
+Reconcile is **not** constrained to `{run1, run2}` — it can invent a third reading. After each reconcile result, the pipeline compares reconcile output to run1 and run2 using the same whitespace-stripped comparison as the reconcile skip logic.
+
+| Outcome | Action |
+|---------|--------|
+| Reconcile matches run1 **or** run2 | Accept reconcile output (no extra API call) |
+| Reconcile matches **neither** | Fire **pass 4** |
+
+**Pass 4** is a fresh image-only transcription using the **same prompt as run 1/run 2** (`transcription_user_prompt`). It is **not** shown run1, run2, or reconcile text — avoids anchoring bias.
+
+| Pass 4 result | Final text in `reconcile/page_XXXX.txt` |
+|---------------|----------------------------------------|
+| Matches run1 | run1 |
+| Matches run2 | run2 |
+| Matches reconcile | reconcile |
+| Fourth unique reading | **run1** (fallback) + page added to `human_review_pages` |
+
+Pass 4 never recurses. When it fires, `reconcile_log.txt` logs all four readings and the outcome. In batch reconcile mode, pass 4 still runs as a **live** API call per affected page.
+
+**Code:** `pdf_transcribe_finalize.py` — `_apply_pass4_if_third_reading`, `_run_pass4_transcription`, `resolve_pass4_outcome`.
 
 ---
 

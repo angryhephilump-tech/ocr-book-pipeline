@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import re
 from dataclasses import dataclass, field
 
@@ -172,35 +173,127 @@ def _sentence_spans(logical: str, lang_cfg: JobLanguageConfig) -> list[tuple[int
     return _latin_sentence_spans(logical)
 
 
-def _flex_find(haystack: str, needle: str) -> int | None:
+_MAX_FLEX_MATCH_ANCHOR_TRIES = 48
+_COMMON_ANCHOR_TOKENS = frozenset(
+    {
+        "a",
+        "al",
+        "con",
+        "de",
+        "del",
+        "el",
+        "en",
+        "es",
+        "la",
+        "las",
+        "le",
+        "lo",
+        "los",
+        "por",
+        "que",
+        "se",
+        "su",
+        "un",
+        "una",
+        "y",
+    }
+)
+
+
+def _pick_anchor_token_index(tokens: list[str], lower_h: str) -> int:
+    """Prefer longest token; among ties prefer rarest in haystack (not common stop-words)."""
+    best_idx = 0
+    best_key: tuple[int, int, int] = (-1, 0, 0)
+    for i, tok in enumerate(tokens):
+        tok_l = tok.lower()
+        count = lower_h.count(tok_l)
+        uncommon = 0 if tok_l in _COMMON_ANCHOR_TOKENS else 1
+        key = (len(tok), uncommon, -count)
+        if key > best_key:
+            best_key = key
+            best_idx = i
+    return best_idx
+
+
+def _tokens_match_at_anchor(
+    haystack: str,
+    tokens: list[str],
+    anchor_idx: int,
+    anchor_start: int,
+) -> tuple[int, int] | None:
+    anchor = tokens[anchor_idx]
+    if haystack[anchor_start : anchor_start + len(anchor)].lower() != anchor.lower():
+        return None
+
+    span_start = anchor_start
+    cur = anchor_start
+    for i in range(anchor_idx - 1, -1, -1):
+        tok = tokens[i]
+        end = cur
+        while end > 0 and haystack[end - 1].isspace():
+            end -= 1
+        start = end - len(tok)
+        if start < 0 or haystack[start:end].lower() != tok.lower():
+            return None
+        span_start = start
+        cur = start
+
+    cur = anchor_start + len(anchor)
+    for i in range(anchor_idx + 1, len(tokens)):
+        tok = tokens[i]
+        while cur < len(haystack) and haystack[cur].isspace():
+            cur += 1
+        if haystack[cur : cur + len(tok)].lower() != tok.lower():
+            return None
+        cur += len(tok)
+    return span_start, cur
+
+
+def _flex_match_span(haystack: str, needle: str) -> tuple[int, int] | None:
+    """Find needle in haystack allowing flexible whitespace (linear scan, no regex backtracking)."""
+    needle = needle.strip()
     if not needle:
         return None
     idx = haystack.find(needle)
     if idx >= 0:
-        return idx
-    pattern = re.escape(needle.strip())
-    pattern = pattern.replace(r"\ ", r"\s+")
-    m = re.search(pattern, haystack, re.IGNORECASE | re.DOTALL)
-    return m.start() if m else None
+        return idx, idx + len(needle)
+
+    tokens = needle.split()
+    if not tokens:
+        return None
+    if len(tokens) == 1:
+        token = tokens[0]
+        lower_h = haystack.lower()
+        i = lower_h.find(token.lower())
+        return (i, i + len(token)) if i >= 0 else None
+
+    lower_h = haystack.lower()
+    anchor_idx = _pick_anchor_token_index(tokens, lower_h)
+    anchor = tokens[anchor_idx].lower()
+    pos = 0
+    tries = 0
+    while pos <= len(haystack) and tries < _MAX_FLEX_MATCH_ANCHOR_TRIES:
+        start = lower_h.find(anchor, pos)
+        if start < 0:
+            break
+        tries += 1
+        matched = _tokens_match_at_anchor(haystack, tokens, anchor_idx, start)
+        if matched:
+            return matched
+        pos = start + 1
+    return None
+
+
+def _flex_find(haystack: str, needle: str) -> int | None:
+    span = _flex_match_span(haystack, needle)
+    return span[0] if span else None
 
 
 def _map_logical_span_to_original(original: str, logical: str, l_start: int, l_end: int) -> tuple[int, int] | None:
     snippet = logical[l_start:l_end].strip()
     if not snippet:
         return None
-    flex = re.escape(snippet[: min(40, len(snippet))])
-    flex = flex.replace(r"\ ", r"[\s\n]+")
-    m = re.search(flex, original, re.IGNORECASE | re.DOTALL)
-    if not m:
-        idx = _flex_find(original, snippet)
-        if idx is None:
-            return None
-        return idx, idx + len(snippet)
-    start = m.start()
-    end_pat = re.escape(snippet[-min(30, len(snippet)) :]).replace(r"\ ", r"[\s\n]+")
-    m_end = re.search(end_pat, original[start:], re.IGNORECASE | re.DOTALL)
-    end = start + (m_end.end() if m_end else len(snippet))
-    return start, end
+    return _flex_match_span(original, snippet)
 
 
 def _terms_in_sentence(sentence: str, terms: list[str], lang_cfg: JobLanguageConfig) -> list[str]:
@@ -216,8 +309,15 @@ def _terms_in_sentence(sentence: str, terms: list[str], lang_cfg: JobLanguageCon
     return found
 
 
-def _word_count_before(text: str, pos: int) -> int:
-    return len(re.findall(r"\S+", text[:pos]))
+def _logical_word_spans(logical: str) -> tuple[list[tuple[int, int]], list[int]]:
+    """Word (start, end) spans in logical text and parallel start offsets for bisect."""
+    spans = [(m.start(), m.end()) for m in re.finditer(r"\S+", logical)]
+    starts = [s for s, _ in spans]
+    return spans, starts
+
+
+def _word_count_before_spans(word_starts: list[int], pos: int) -> int:
+    return bisect.bisect_left(word_starts, pos)
 
 
 def _maybe_widen_heading(
@@ -287,6 +387,8 @@ def collect_patch_operations(
     for section_name, section_text in sections:
         logical = _logical_text(section_text)
         spans = _sentence_spans(logical, lang_cfg)
+        word_spans, word_starts = _logical_word_spans(logical)
+        total_words = len(word_spans)
         handled: set[tuple[int, int]] = set()
 
         for span_idx, (l_start, l_end) in enumerate(spans):
@@ -296,9 +398,9 @@ def collect_patch_operations(
                 continue
 
             use_idx = span_idx
-            if _word_count_before(logical, l_start) < 10 or _word_count_before(
-                logical, l_end
-            ) > len(re.findall(r"\S+", logical)) - 10:
+            if _word_count_before_spans(word_starts, l_start) < 10 or _word_count_before_spans(
+                word_starts, l_end
+            ) > total_words - 10:
                 widened = _maybe_widen_heading(logical, spans, span_idx, lang_cfg)
                 if widened != span_idx:
                     l_start, l_end = _merge_span_range(spans, span_idx, widened)

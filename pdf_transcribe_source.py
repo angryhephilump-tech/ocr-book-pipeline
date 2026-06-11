@@ -339,6 +339,7 @@ def patch_terms_for_page(
     state: dict,
     *,
     document_text: str | None = None,
+    term_index=None,
 ) -> list[str]:
     """Hard terms minus soft terms (stable names that skip spot-patch API)."""
     from pdf_transcribe_lang import effective_hard_terms
@@ -346,7 +347,11 @@ def patch_terms_for_page(
     slug = resolve_source_slug(state)
     soft = load_soft_terms(slug, state)
     terms = effective_hard_terms(
-        base, lang_cfg, state, document_text=document_text
+        base,
+        lang_cfg,
+        state,
+        document_text=document_text,
+        term_index=term_index,
     )
     return [t for t in terms if t.lower() not in soft]
 
@@ -357,11 +362,16 @@ def spot_patch_operations_for_page(
     state: dict,
     *,
     document_text: str | None = None,
+    term_index=None,
 ) -> list:
     from pdf_transcribe_spot import cap_patch_operations, collect_patch_operations
 
     patch_terms = patch_terms_for_page(
-        base, lang_cfg, state, document_text=document_text
+        base,
+        lang_cfg,
+        state,
+        document_text=document_text,
+        term_index=term_index,
     )
     ops = collect_patch_operations(base, patch_terms, lang_cfg)
     return cap_patch_operations(ops, MAX_PATCHES_PER_PAGE)

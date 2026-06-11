@@ -347,21 +347,48 @@ def term_occurrence_count(term: str, document_text: str) -> int:
     return len(pattern.findall(view))
 
 
+class DocumentTermIndex:
+    """Cached term counts over a assembled document (one view build per book)."""
+
+    __slots__ = ("_view", "_counts")
+
+    def __init__(self, document_text: str) -> None:
+        self._view = (
+            re.sub(r"[\[\]]", "", strip_for_term_match(document_text)) if document_text else ""
+        )
+        self._counts: dict[str, int] = {}
+
+    def count(self, term: str) -> int:
+        if not term:
+            return 0
+        key = term.lower()
+        if key not in self._counts:
+            pattern = re.compile(re.escape(term), re.IGNORECASE)
+            self._counts[key] = len(pattern.findall(self._view))
+        return self._counts[key]
+
+
 def filter_terms_by_min_occurrences(
     terms: list[str],
     document_text: str,
     *,
     min_count: int = 2,
     always_keep: set[str] | None = None,
+    term_index: DocumentTermIndex | None = None,
 ) -> list[str]:
     """Drop single-occurrence auto terms; keep seeds and listed hard terms."""
+    index = term_index or (DocumentTermIndex(document_text) if document_text else None)
     keep_lower = {k.lower() for k in (always_keep or set())}
     out: list[str] = []
     for term in terms:
         if term.lower() in keep_lower:
             out.append(term)
             continue
-        if term_occurrence_count(term, document_text) >= min_count:
+        if index is None:
+            if term_occurrence_count(term, document_text) >= min_count:
+                out.append(term)
+            continue
+        if index.count(term) >= min_count:
             out.append(term)
     return out
 
@@ -408,6 +435,7 @@ def effective_hard_terms(
     state: dict | None = None,
     *,
     document_text: str | None = None,
+    term_index: DocumentTermIndex | None = None,
 ) -> list[str]:
     base = load_hard_terms(lang_cfg.source_id, state)
     auto = auto_hard_term_candidates(text, lang_cfg)
@@ -418,7 +446,11 @@ def effective_hard_terms(
             profile = state.get("detected_source_profile") or {}
             seed.update(str(t).lower() for t in (profile.get("seed_hard_terms") or []))
         auto = filter_terms_by_min_occurrences(
-            auto, document_text, min_count=2, always_keep=seed
+            auto,
+            document_text,
+            min_count=2,
+            always_keep=seed,
+            term_index=term_index,
         )
     seen: set[str] = set()
     merged: list[str] = []

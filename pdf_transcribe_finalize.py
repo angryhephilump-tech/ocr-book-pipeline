@@ -23,6 +23,7 @@ from pdf_transcribe import (
     assemble_run_txt,
     build_reconcile_params,
     build_spot_patch_params,
+    call_claude,
     format_page_block,
     is_skip_body,
     iter_batch_results,
@@ -41,12 +42,15 @@ from pdf_transcribe import (
     save_state,
     spot_check_custom_id,
     spot_check_page_path,
+    transcription_user_prompt,
     wait_for_batch,
     pages_disagree,
     pages_need_content_reconcile,
     anthropic_request,
 )
-from pdf_transcribe_lang import effective_hard_terms, page_has_hard_term
+from pdf_transcribe_lang import DocumentTermIndex, effective_hard_terms, page_has_hard_term
+
+SPOT_PREP_REPORT_EVERY = 25
 from pdf_transcribe_source import (
     optimize_soft_terms_from_log,
     page_section_hint,
@@ -139,6 +143,11 @@ def pages_needing_reconcile(work_dir: Path, page_numbers: list[int]) -> list[Rec
             continue
         if not pages_need_content_reconcile(t1, t2):
             continue
+        rec_path = reconcile_page_path(work_dir, page_num)
+        if rec_path.is_file():
+            existing = rec_path.read_text(encoding="utf-8").strip()
+            if existing and not existing.startswith("[Reconcile failed"):
+                continue
         image_path = work_dir / "images" / f"page_{page_num:04d}.png"
         if image_path.is_file():
             items.append(
@@ -169,6 +178,30 @@ def final_page_body(work_dir: Path, page_num: int) -> str:
     return base_page_body(work_dir, page_num)
 
 
+def load_page_bodies(work_dir: Path, page_numbers: list[int]) -> dict[int, str]:
+    """Load base page text once per page (reconcile or run 1)."""
+    return {page_num: base_page_body(work_dir, page_num) for page_num in page_numbers}
+
+
+def build_document_text(
+    work_dir: Path,
+    page_numbers: list[int],
+    *,
+    page_bodies: dict[int, str] | None = None,
+) -> str:
+    """Assemble non-skipped page bodies once (single disk read per page)."""
+    parts: list[str] = []
+    for page_num in page_numbers:
+        body = (
+            page_bodies[page_num]
+            if page_bodies is not None
+            else base_page_body(work_dir, page_num)
+        )
+        if not is_skip_body(body):
+            parts.append(body)
+    return "\n\n".join(parts)
+
+
 def collect_spot_patch_requests(
     work_dir: Path,
     page_numbers: list[int],
@@ -176,17 +209,43 @@ def collect_spot_patch_requests(
     lang_cfg,
     *,
     document_text: str | None = None,
+    term_index: DocumentTermIndex | None = None,
+    page_bodies: dict[int, str] | None = None,
+    report: Callable | None = None,
+    total_pages: int = 0,
 ) -> list[SpotPatchRequest]:
     done = completed_special_pages(state, "spot_check")
     requests: list[SpotPatchRequest] = []
-    for page_num in page_numbers:
+    if document_text and term_index is None:
+        term_index = DocumentTermIndex(document_text)
+    total = total_pages or len(page_numbers)
+    for idx, page_num in enumerate(page_numbers, start=1):
+        if report and (idx == 1 or idx % SPOT_PREP_REPORT_EVERY == 0 or idx == len(page_numbers)):
+            report(
+                "spot_prep",
+                0,
+                idx,
+                total,
+                None,
+                f"Planning spot checks: page {idx}/{len(page_numbers)}…",
+                step_done=idx,
+                step_total=len(page_numbers),
+            )
         if page_num in done:
             continue
-        base = base_page_body(work_dir, page_num)
+        base = (
+            page_bodies[page_num]
+            if page_bodies is not None
+            else base_page_body(work_dir, page_num)
+        )
         if is_skip_body(base):
             continue
         terms = effective_hard_terms(
-            base, lang_cfg, state, document_text=document_text
+            base,
+            lang_cfg,
+            state,
+            document_text=document_text,
+            term_index=term_index,
         )
         hint = page_section_hint(state, page_num)
         if not page_has_hard_term(base, terms, lang_cfg, section_hint=hint):
@@ -195,7 +254,11 @@ def collect_spot_patch_requests(
         if not image_path.is_file():
             continue
         ops = spot_patch_operations_for_page(
-            base, lang_cfg, state, document_text=document_text
+            base,
+            lang_cfg,
+            state,
+            document_text=document_text,
+            term_index=term_index,
         )
         for op in ops:
             requests.append(
@@ -264,6 +327,145 @@ def _save_spot_patched_page(
     return applied, rejected, needs_review
 
 
+def _reconcile_content_matches(a: str, b: str) -> bool:
+    from pdf_transcribe_lang import strip_whitespace_for_compare
+
+    return strip_whitespace_for_compare(a) == strip_whitespace_for_compare(b)
+
+
+def reconcile_needs_pass4(reconcile_body: str, run1: str, run2: str) -> bool:
+    return not (
+        _reconcile_content_matches(reconcile_body, run1)
+        or _reconcile_content_matches(reconcile_body, run2)
+    )
+
+
+def resolve_pass4_outcome(
+    run1: str,
+    run2: str,
+    reconcile_body: str,
+    pass4_body: str,
+) -> tuple[str, str, bool]:
+    """Return (final_text, outcome_label, needs_human_review)."""
+    if _reconcile_content_matches(pass4_body, run1):
+        return run1, "pass4 matched run1 — using run1", False
+    if _reconcile_content_matches(pass4_body, run2):
+        return run2, "pass4 matched run2 — using run2", False
+    if _reconcile_content_matches(pass4_body, reconcile_body):
+        return reconcile_body, "pass4 matched reconcile — accepting reconcile", False
+    return run1, "fourth unique reading — human review, fallback run1", True
+
+
+def _run_pass4_transcription(
+    api_key: str,
+    image_path: Path,
+    *,
+    model: str,
+    work_dir: Path,
+    state: dict,
+) -> str:
+    user_prompt = transcription_user_prompt(work_dir, state)
+    try:
+        raw = call_claude(
+            api_key,
+            image_path,
+            model=model,
+            user_text=user_prompt,
+        )
+    except RuntimeError as exc:
+        return f"[Pass 4 failed: {exc}]"
+    return normalize_transcription_output(raw)
+
+
+def _apply_pass4_if_third_reading(
+    reconcile_body: str,
+    run1_text: str,
+    run2_text: str,
+    image_path: Path,
+    *,
+    api_key: str,
+    model: str,
+    work_dir: Path,
+    state: dict,
+) -> tuple[str, dict | None, bool]:
+    """If reconcile is a third reading, run pass 4 and resolve."""
+    if not reconcile_needs_pass4(reconcile_body, run1_text, run2_text):
+        return reconcile_body, None, False
+
+    pass4_body = _run_pass4_transcription(
+        api_key,
+        image_path,
+        model=model,
+        work_dir=work_dir,
+        state=state,
+    )
+    time.sleep(API_DELAY_SEC)
+    final_body, outcome, needs_review = resolve_pass4_outcome(
+        run1_text, run2_text, reconcile_body, pass4_body
+    )
+    extra = {
+        "pass4_fired": True,
+        "run1_reading": run1_text,
+        "run2_reading": run2_text,
+        "reconcile_reading": reconcile_body,
+        "pass4_reading": pass4_body,
+        "pass4_outcome": outcome,
+    }
+    return final_body, extra, needs_review
+
+
+def _format_reading_for_log(label: str, text: str) -> list[str]:
+    lines = [f"  {label}:"]
+    if text:
+        for line in text.splitlines():
+            lines.append(f"    {line}")
+    else:
+        lines.append("    (empty)")
+    return lines
+
+
+def _process_reconcile_result(
+    work_dir: Path,
+    page_num: int,
+    reconcile_body: str,
+    run1_text: str,
+    run2_text: str,
+    image_path: Path,
+    *,
+    api_key: str,
+    model: str,
+    state: dict,
+    resolution: str,
+    uncertain: bool,
+    uncertain_note: str | None,
+) -> tuple[dict, bool]:
+    """Write reconcile page file; return (log_entry, needs_human_review_from_pass4)."""
+    final_body, pass4_extra, pass4_review = _apply_pass4_if_third_reading(
+        reconcile_body,
+        run1_text,
+        run2_text,
+        image_path,
+        api_key=api_key,
+        model=model,
+        work_dir=work_dir,
+        state=state,
+    )
+    reconcile_page_path(work_dir, page_num).parent.mkdir(parents=True, exist_ok=True)
+    reconcile_page_path(work_dir, page_num).write_text(final_body, encoding="utf-8")
+    mark_special_page_complete(state, "reconcile", page_num)
+    entry: dict = {
+        "page": page_num,
+        "disagreement": "run1 and run2 differ (content)",
+        "resolution": resolution,
+        "uncertain": uncertain,
+        "uncertain_note": uncertain_note,
+    }
+    if pass4_extra:
+        entry.update(pass4_extra)
+        entry["resolution"] = f"{resolution} + pass 4 cross-check"
+    return entry, pass4_review
+
+
 def write_reconcile_log(work_dir: Path, entries: list[dict]) -> Path:
     lines = ["RECONCILE LOG", f"Generated: {datetime.now().isoformat(timespec='seconds')}", ""]
     for e in entries:
@@ -273,6 +475,18 @@ def write_reconcile_log(work_dir: Path, entries: list[dict]) -> Path:
         lines.append(f"  UNCERTAIN: {'yes' if e.get('uncertain') else 'no'}")
         if e.get("uncertain_note"):
             lines.append(f"  Note: {e['uncertain_note']}")
+        if e.get("pass4_fired"):
+            lines.append("  Pass 4 fired: yes")
+            for key, label in (
+                ("run1_reading", "Run 1 reading"),
+                ("run2_reading", "Run 2 reading"),
+                ("reconcile_reading", "Reconcile reading"),
+                ("pass4_reading", "Pass 4 reading"),
+            ):
+                if key in e:
+                    lines.extend(_format_reading_for_log(label, e[key]))
+            if e.get("pass4_outcome"):
+                lines.append(f"  Pass 4 outcome: {e['pass4_outcome']}")
         lines.append("")
     path = work_dir / "reconcile_log.txt"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -490,9 +704,9 @@ def finalize_pipeline(
         tag_page_sections_from_run1(work_dir, state)
         save_state(work_dir, state)
 
-    document_text = "\n\n".join(
-        base_page_body(work_dir, n) for n in page_numbers if not is_skip_body(base_page_body(work_dir, n))
-    )
+    page_bodies = load_page_bodies(work_dir, page_numbers)
+    document_text = build_document_text(work_dir, page_numbers, page_bodies=page_bodies)
+    term_index = DocumentTermIndex(document_text) if document_text else None
 
     reconcile_items = pages_needing_reconcile(work_dir, page_numbers)
     if reconcile_items and report:
@@ -508,6 +722,7 @@ def finalize_pipeline(
         )
 
     if reconcile_items:
+        reconcile_by_page = {item.page_num: item for item in reconcile_items}
         if use_batch:
             payload = [
                 {
@@ -536,21 +751,29 @@ def finalize_pipeline(
                     continue
                 if kind != "reconcile":
                     continue
+                item = reconcile_by_page.get(page_num)
+                if not item:
+                    continue
                 body, uncertain, note = parse_reconcile_output(text)
-                reconcile_page_path(work_dir, page_num).parent.mkdir(parents=True, exist_ok=True)
-                reconcile_page_path(work_dir, page_num).write_text(body, encoding="utf-8")
-                mark_special_page_complete(state, "reconcile", page_num)
-                log_entries.append(
-                    {
-                        "page": page_num,
-                        "disagreement": "run1 and run2 differ (content)",
-                        "resolution": "batch reconcile from image",
-                        "uncertain": uncertain,
-                        "uncertain_note": note,
-                    }
+                entry, pass4_review = _process_reconcile_result(
+                    work_dir,
+                    page_num,
+                    body,
+                    item.run1_text,
+                    item.run2_text,
+                    item.image_path,
+                    api_key=api_key,
+                    model=model,
+                    state=state,
+                    resolution="batch reconcile from image",
+                    uncertain=uncertain,
+                    uncertain_note=note,
                 )
+                log_entries.append(entry)
                 if uncertain:
                     stats["pages_uncertain"] += 1
+                    stats["human_review_pages"].append(page_num)
+                if pass4_review:
                     stats["human_review_pages"].append(page_num)
                 stats["pages_reconciled"] += 1
         else:
@@ -567,20 +790,25 @@ def finalize_pipeline(
                     body, uncertain, note = parse_reconcile_output(raw)
                 except RuntimeError as exc:
                     body, uncertain, note = f"[Reconcile failed: {exc}]", True, str(exc)
-                reconcile_page_path(work_dir, item.page_num).parent.mkdir(parents=True, exist_ok=True)
-                reconcile_page_path(work_dir, item.page_num).write_text(body, encoding="utf-8")
-                mark_special_page_complete(state, "reconcile", item.page_num)
-                log_entries.append(
-                    {
-                        "page": item.page_num,
-                        "disagreement": "run1 and run2 differ (content)",
-                        "resolution": "live reconcile from image",
-                        "uncertain": uncertain,
-                        "uncertain_note": note,
-                    }
+                entry, pass4_review = _process_reconcile_result(
+                    work_dir,
+                    item.page_num,
+                    body,
+                    item.run1_text,
+                    item.run2_text,
+                    item.image_path,
+                    api_key=api_key,
+                    model=model,
+                    state=state,
+                    resolution="live reconcile from image",
+                    uncertain=uncertain,
+                    uncertain_note=note,
                 )
+                log_entries.append(entry)
                 if uncertain:
                     stats["pages_uncertain"] += 1
+                    stats["human_review_pages"].append(item.page_num)
+                if pass4_review:
                     stats["human_review_pages"].append(item.page_num)
                 stats["pages_reconciled"] += 1
                 time.sleep(API_DELAY_SEC)
@@ -589,8 +817,27 @@ def finalize_pipeline(
     write_reconcile_log(work_dir, log_entries)
 
     if spot_check_enabled:
+        if report:
+            report(
+                "spot_prep",
+                0,
+                0,
+                total_pages,
+                None,
+                f"Planning spot checks ({total_pages} pages)…",
+                step_done=0,
+                step_total=total_pages,
+            )
         patch_requests = collect_spot_patch_requests(
-            work_dir, page_numbers, state, lang_cfg, document_text=document_text
+            work_dir,
+            page_numbers,
+            state,
+            lang_cfg,
+            document_text=document_text,
+            term_index=term_index,
+            page_bodies=page_bodies,
+            report=report,
+            total_pages=total_pages,
         )
         pages_with_spot = sorted({r.page_num for r in patch_requests})
         spot_chunks = max(

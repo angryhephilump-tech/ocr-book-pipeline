@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -24,6 +25,7 @@ from pdf_transcribe_assembly import (  # noqa: E402
     rejoin_bracket_fragment_pair,
 )
 from pdf_transcribe_lang import (  # noqa: E402
+    DocumentTermIndex,
     build_normalization_rules_text,
     filter_terms_by_min_occurrences,
     job_language_config,
@@ -41,6 +43,10 @@ from pdf_transcribe_source import (  # noqa: E402
     classify_page_section,
     direction_for_script,
     ensure_source_identity,
+)
+from pdf_transcribe_finalize import (  # noqa: E402
+    reconcile_needs_pass4,
+    resolve_pass4_outcome,
 )
 from pdf_transcribe_spot import (  # noqa: E402
     REJECT_IMPOSSIBLE_SIC,
@@ -72,6 +78,44 @@ def test_content_reconcile_skip() -> None:
     assert strip_whitespace_for_compare(a) == strip_whitespace_for_compare(b)
     c = "Hola mundo.\nSegunda línea."
     assert pages_need_content_reconcile(a, c)
+
+
+def test_reconcile_pass4_third_reading() -> None:
+    run1 = "Linea uno.\nLinea dos."
+    run2 = "Linea 1.\nLinea 2."
+    reconcile = "Linea primera.\nLinea segunda."
+    assert reconcile_needs_pass4(reconcile, run1, run2)
+    assert not reconcile_needs_pass4(run1, run1, run2)
+    assert not reconcile_needs_pass4("Linea  uno.\nLinea dos.", run1, run2)
+
+
+def test_document_term_index_cache() -> None:
+    doc = "Rarelongword appears here. Rarelongword again."
+    index = DocumentTermIndex(doc)
+    assert index.count("Rarelongword") == 2
+    assert index.count("Rarelongword") == 2
+    filtered = filter_terms_by_min_occurrences(["Rarelongword"], doc, min_count=2, term_index=index)
+    assert filtered == ["Rarelongword"]
+
+
+def test_resolve_pass4_outcome() -> None:
+    run1 = "alpha"
+    run2 = "beta"
+    reconcile = "gamma"
+    final, outcome, review = resolve_pass4_outcome(run1, run2, reconcile, run1)
+    assert final == run1
+    assert "run1" in outcome
+    assert not review
+    final, outcome, review = resolve_pass4_outcome(run1, run2, reconcile, run2)
+    assert final == run2
+    assert not review
+    final, outcome, review = resolve_pass4_outcome(run1, run2, reconcile, reconcile)
+    assert final == reconcile
+    assert not review
+    final, outcome, review = resolve_pass4_outcome(run1, run2, reconcile, "delta")
+    assert final == run1
+    assert review
+    assert "fourth unique" in outcome
 
 
 def test_hard_terms() -> None:
@@ -125,6 +169,43 @@ def test_collect_patch_ops() -> None:
     ops = collect_patch_operations(text, terms, cfg)
     assert len(ops) >= 1
     assert any("Nezahualcoyotl" in op.sentence for op in ops)
+
+
+def test_flex_match_span_no_regex_hang() -> None:
+    from pdf_transcribe_spot import _flex_match_span, _map_logical_span_to_original
+
+    original = "El rey\nNezahualcoyotl   gobernó Texcoco."
+    logical = "El rey Nezahualcoyotl gobernó Texcoco."
+    span = _flex_match_span(original, logical)
+    assert span == (0, len(original))
+    mapped = _map_logical_span_to_original(original, logical, 0, len(logical))
+    assert mapped == span
+
+    padding = "ab " * 8000
+    original_long = padding + "foo bar baz end"
+    span = _flex_match_span(original_long, "foo bar baz end")
+    assert span is not None
+    assert original_long[span[0] : span[1]] == "foo bar baz end"
+
+    de_padding = "de " * 4000
+    original_de = de_padding + "rey Nezahualcoyotl gobernó Texcoco."
+    span = _flex_match_span(original_de, "rey Nezahualcoyotl gobernó Texcoco.")
+    assert span is not None
+    assert "Nezahualcoyotl" in original_de[span[0] : span[1]]
+
+
+def test_extract_json_blob_no_regex_hang() -> None:
+    from pdf_transcribe_detect import _extract_json_blob
+
+    assert _extract_json_blob('{"a": 1}') == {"a": 1}
+    assert _extract_json_blob('noise {"b": 2} trailing') == {"b": 2}
+    assert _extract_json_blob("prefix [1, 2, 3] suffix") == [1, 2, 3]
+    malformed = "{" + "a" * 5000
+    try:
+        _extract_json_blob(malformed)
+        assert False, "expected JSONDecodeError"
+    except json.JSONDecodeError:
+        pass
 
 
 def test_impossible_string_rejects_patch() -> None:
@@ -484,6 +565,9 @@ def main() -> int:
         test_skip_format,
         test_pages_disagree,
         test_content_reconcile_skip,
+        test_reconcile_pass4_third_reading,
+        test_document_term_index_cache,
+        test_resolve_pass4_outcome,
         test_hard_terms,
         test_parse_reconcile_uncertain,
         test_parse_batch_ids,
@@ -491,6 +575,8 @@ def main() -> int:
         test_chatter_to_skip,
         test_bracket_terms,
         test_collect_patch_ops,
+        test_flex_match_span_no_regex_hang,
+        test_extract_json_blob_no_regex_hang,
         test_impossible_string_rejects_patch,
         test_missing_hard_term_rejects_patch,
         test_script_mismatch_latin,
