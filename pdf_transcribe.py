@@ -702,14 +702,28 @@ def spot_check_custom_id(page_num: int, op_index: int = 0) -> str:
     return f"spot_p{page_num:04d}_{op_index:02d}"
 
 
+def spot_page_custom_id(page_num: int) -> str:
+    return f"spotpg_p{page_num:04d}"
+
+
+def pass4_custom_id(page_num: int) -> str:
+    return f"p4_p{page_num:04d}"
+
+
 def parse_batch_custom_id(custom_id: str) -> tuple[str, int, int]:
-    """Return (kind, run_or_0, page_num). kind: transcribe|reconcile|spot."""
+    """Return (kind, run_or_op_index, page_num). kind: transcribe|reconcile|spot|spotpg|pass4."""
     match = re.match(r"^r(\d+)_p(\d+)$", custom_id)
     if match:
         return "transcribe", int(match.group(1)), int(match.group(2))
     match = re.match(r"^rec_p(\d+)$", custom_id)
     if match:
         return "reconcile", 0, int(match.group(1))
+    match = re.match(r"^spotpg_p(\d+)$", custom_id)
+    if match:
+        return "spotpg", 0, int(match.group(1))
+    match = re.match(r"^p4_p(\d+)$", custom_id)
+    if match:
+        return "pass4", 0, int(match.group(1))
     match = re.match(r"^spot_p(\d+)(?:_(\d+))?$", custom_id)
     if match:
         return "spot", int(match.group(2) or 0), int(match.group(1))
@@ -1268,6 +1282,25 @@ def build_spot_patch_params(
         image_path,
         model,
         user_text=build_patch_prompt(sentence, terms, lang_cfg, section_hint=section_hint),
+    )
+
+
+def build_page_spot_patch_params(
+    image_path: Path,
+    model: str,
+    operations,
+    lang_cfg,
+    *,
+    section_hint: str | None = None,
+) -> dict:
+    from pdf_transcribe_spot import build_page_patch_prompt
+
+    return build_vision_message_params(
+        image_path,
+        model,
+        user_text=build_page_patch_prompt(
+            operations, lang_cfg, section_hint=section_hint
+        ),
     )
 
 

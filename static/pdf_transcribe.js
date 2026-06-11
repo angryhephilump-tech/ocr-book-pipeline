@@ -23,6 +23,8 @@ const profileEdit = document.getElementById("profile-edit");
 const confirmYes = document.getElementById("confirm-yes");
 const confirmEditBtn = document.getElementById("confirm-edit");
 const confirmCancel = document.getElementById("confirm-cancel");
+const confirmStartOver = document.getElementById("confirm-start-over");
+const resumeHint = document.getElementById("resume-hint");
 const progressMsg = document.getElementById("progress-msg");
 const progressDetail = document.getElementById("progress-detail");
 const barFill = document.getElementById("bar-fill");
@@ -38,8 +40,10 @@ const keyInput = document.getElementById("api-key");
 let workDir = null;
 let pollTimer = null;
 let editMode = false;
+let resumeChoiceMode = false;
 
 const CONFIRM_YES_DEFAULT = "Yes, proceed";
+const CONFIRM_YES_RESUME = "Resume existing job";
 const CONFIRM_YES_EDIT = "Save & proceed";
 const CONFIRM_EDIT_DEFAULT = "Edit overrides";
 
@@ -58,10 +62,25 @@ async function parseApiResponse(res) {
 
 function resetConfirmUi() {
   editMode = false;
+  resumeChoiceMode = false;
   profileEdit.classList.add("hidden");
   confirmYes.textContent = CONFIRM_YES_DEFAULT;
   confirmEditBtn.textContent = CONFIRM_EDIT_DEFAULT;
   confirmEditBtn.disabled = false;
+  confirmStartOver?.classList.add("hidden");
+  resumeHint?.classList.add("hidden");
+}
+
+function formatExistingWorkSummary(summary) {
+  if (!summary || typeof summary !== "object") return "";
+  const parts = [];
+  const runs = summary.runs || {};
+  for (const [run, count] of Object.entries(runs)) {
+    if (count > 0) parts.push(`run ${run}: ${count} pages`);
+  }
+  if (summary.reconcile_pages > 0) parts.push(`reconcile: ${summary.reconcile_pages}`);
+  if (summary.spot_check_pages > 0) parts.push(`spot-check: ${summary.spot_check_pages}`);
+  return parts.join(" · ");
 }
 
 function setFormLocked(locked) {
@@ -388,7 +407,7 @@ function updateBar(data) {
   barFill.style.width = `${Math.min(100, pct)}%`;
 }
 
-function showConfirmPanel(lines, fromSaved) {
+function showConfirmPanel(lines, fromSaved, profileMeta = {}) {
   resetConfirmUi();
   profileLines.innerHTML = "";
   for (const line of lines) {
@@ -397,7 +416,23 @@ function showConfirmPanel(lines, fromSaved) {
     profileLines.appendChild(li);
   }
   const hint = document.getElementById("confirm-hint");
-  if (hint) {
+  const hasWork =
+    profileMeta.has_existing_work || profileMeta.needs_resume_choice;
+  resumeChoiceMode = Boolean(hasWork);
+  if (hasWork) {
+    const summary = formatExistingWorkSummary(profileMeta.existing_work_summary);
+    if (hint) {
+      hint.textContent = summary
+        ? `This folder already has completed work (${summary}). Resume or start over?`
+        : "This folder already has completed work. Resume or start over?";
+    }
+    if (resumeHint && summary) {
+      resumeHint.textContent = `Completed: ${summary}`;
+      resumeHint.classList.remove("hidden");
+    }
+    confirmYes.textContent = CONFIRM_YES_RESUME;
+    confirmStartOver?.classList.remove("hidden");
+  } else if (hint) {
     hint.textContent = fromSaved
       ? "Loaded saved profile for this source. Proceed?"
       : "Proceed with these settings?";
@@ -430,8 +465,11 @@ async function pollProgress() {
 
     if (data.awaiting_confirm || data.phase === "awaiting_confirm") {
       const prof = await fetchProfile();
-      if (prof.ready && prof.needs_confirmation) {
-        showConfirmPanel(prof.lines || [], prof.from_saved);
+      if (
+        prof.ready &&
+        (prof.needs_confirmation || prof.needs_resume_choice || prof.has_existing_work)
+      ) {
+        showConfirmPanel(prof.lines || [], prof.from_saved, prof);
         return;
       }
     }
@@ -616,8 +654,19 @@ confirmYes.addEventListener("click", () => {
     if (script) overrides.script = script;
     sendConfirm("edit", overrides);
   } else {
-    sendConfirm("yes");
+    sendConfirm(resumeChoiceMode ? "resume" : "yes");
   }
+});
+
+confirmStartOver?.addEventListener("click", () => {
+  if (
+    !confirm(
+      "Start over? A backup zip will be created first, then all run outputs in this folder will be cleared."
+    )
+  ) {
+    return;
+  }
+  sendConfirm("start_over");
 });
 
 confirmEditBtn.addEventListener("click", () => {

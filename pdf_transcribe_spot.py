@@ -70,6 +70,25 @@ _SECTION_HINTS: dict[str, str] = {
 }
 
 
+def _patch_instruction_block(lang_cfg: JobLanguageConfig) -> str:
+    return (
+        "Instructions:\n"
+        "— Look at the page image and find each sentence\n"
+        "— Check each bracketed term against exactly what is printed in the image\n"
+        "— Return only the corrected sentence with the brackets removed\n"
+        "— Do not change anything outside the bracketed terms\n"
+        f"— {lang_cfg.normalization_rule}\n"
+        "— Do not correct what appears to be a printing error — if the image shows it, "
+        "transcribe it exactly and add [sic] immediately after\n"
+        "— Never add [sic] to words flagged as impossible OCR corruptions — leave those "
+        "unchanged for human review\n"
+        "— If a footnote is numbered 8 in the image transcribe 8 even if the in-text superscript is ³\n"
+        "— Preserve all emphasis markers exactly as they appear in the original sentence\n"
+        "— If you cannot locate a sentence in the image or cannot read it clearly "
+        "return that sentence completely unchanged\n"
+    )
+
+
 def build_patch_prompt(
     sentence: str,
     terms: list[str],
@@ -90,22 +109,73 @@ def build_patch_prompt(
         "The sentence to verify is:\n"
         f"{bracketed}\n"
         f"The bracketed terms are the ones to check: {term_list}\n"
-        "Instructions:\n"
-        "— Look at the page image and find this sentence\n"
-        "— Check each bracketed term against exactly what is printed in the image\n"
-        "— Return only the corrected sentence with the brackets removed\n"
-        "— Do not change anything outside the bracketed terms\n"
-        f"— {lang_cfg.normalization_rule}\n"
-        "— Do not correct what appears to be a printing error — if the image shows it, "
-        "transcribe it exactly and add [sic] immediately after\n"
-        "— Never add [sic] to words flagged as impossible OCR corruptions — leave those "
-        "unchanged for human review\n"
-        "— If a footnote is numbered 8 in the image transcribe 8 even if the in-text superscript is ³\n"
-        "— Preserve all emphasis markers exactly as they appear in the original sentence\n"
-        "— If you cannot locate this sentence in the image or cannot read it clearly "
-        "return the original sentence completely unchanged\n"
+        f"{_patch_instruction_block(lang_cfg)}"
         "— Return nothing except the single corrected sentence. No explanation, no preamble."
     )
+
+
+def build_page_patch_prompt(
+    operations: list[PatchOperation],
+    lang_cfg: JobLanguageConfig,
+    *,
+    section_hint: str | None = None,
+) -> str:
+    """Single prompt verifying all patch operations on one page."""
+    section_note = _SECTION_HINTS.get(section_hint or "", "")
+    sorted_ops = sorted(operations, key=lambda op: op.op_index)
+    lines: list[str] = [
+        "You are verifying multiple sentences from a transcription of a historical book. "
+        "The full page image is provided so you can locate and read the relevant text.\n"
+        f"{section_note}"
+        f"Source language: {lang_cfg.language}\n"
+        f"Source script: {lang_cfg.script}\n"
+        f"Script direction: {lang_cfg.direction}\n"
+        "Sentences to verify (numbered in order):\n",
+    ]
+    for i, op in enumerate(sorted_ops, start=1):
+        term_list = ", ".join(op.terms)
+        lines.append(f"{i}. {op.bracketed_sentence}")
+        lines.append(f"   Terms to check: {term_list}")
+    lines.append("")
+    lines.append(_patch_instruction_block(lang_cfg))
+    lines.append(
+        f"— Return EXACTLY {len(sorted_ops)} line(s), one per sentence, in this format:\n"
+        "  N: <corrected sentence with brackets removed>\n"
+        "— Use the same numbering (1, 2, …) and order as given above\n"
+        "— Return nothing else — no explanation, no preamble, no extra lines"
+    )
+    return "\n".join(lines)
+
+
+_PAGE_PATCH_LINE_RE = re.compile(
+    r"^\s*(\d+)\s*[):.\-]\s*(.+?)\s*$",
+    re.MULTILINE,
+)
+
+
+def parse_page_patch_response(
+    text: str,
+    expected_count: int,
+    originals: list[str],
+) -> list[str]:
+    """Extract per-sentence responses; missing/unparseable → original sentence."""
+    if expected_count <= 0:
+        return []
+    fallback = list(originals[:expected_count])
+    while len(fallback) < expected_count:
+        fallback.append("")
+    parsed: dict[int, str] = {}
+    for match in _PAGE_PATCH_LINE_RE.finditer(text or ""):
+        try:
+            idx = int(match.group(1))
+        except ValueError:
+            continue
+        if idx < 1 or idx > expected_count or idx in parsed:
+            continue
+        body = match.group(2).strip()
+        if body:
+            parsed[idx] = body
+    return [parsed.get(i + 1, fallback[i]) for i in range(expected_count)]
 
 
 def _join_hyphen_breaks(text: str) -> str:

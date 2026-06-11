@@ -45,16 +45,22 @@ from pdf_transcribe_source import (  # noqa: E402
     ensure_source_identity,
 )
 from pdf_transcribe_finalize import (  # noqa: E402
+    Pass4WorkItem,
+    _finalize_reconcile_page,
+    _resolve_pass4_page,
     reconcile_needs_pass4,
     resolve_pass4_outcome,
 )
 from pdf_transcribe_spot import (  # noqa: E402
     REJECT_IMPOSSIBLE_SIC,
     REJECT_MISSING_HARD_TERM,
+    PatchOperation,
     apply_all_patches,
     bracket_terms_in_sentence,
+    build_page_patch_prompt,
     cap_patch_operations,
     collect_patch_operations,
+    parse_page_patch_response,
     sentence_contains_hard_terms,
     validate_patch_response,
 )
@@ -98,6 +104,61 @@ def test_document_term_index_cache() -> None:
     assert filtered == ["Rarelongword"]
 
 
+def test_pass4_batch_resolve_missing_result() -> None:
+    item = Pass4WorkItem(
+        page_num=7,
+        reconcile_body="gamma",
+        run1_text="alpha",
+        run2_text="beta",
+        image_path=Path("page.png"),
+        uncertain=False,
+        uncertain_note=None,
+    )
+    final, extra, review = _resolve_pass4_page(
+        item, "[Pass 4 failed: missing batch result]"
+    )
+    assert final == "alpha"
+    assert review
+    assert extra["pass4_fired"]
+    assert "missing batch result" in extra["pass4_reading"]
+
+
+def test_pass4_batch_resolve_matches_reconcile() -> None:
+    item = Pass4WorkItem(
+        page_num=3,
+        reconcile_body="gamma",
+        run1_text="alpha",
+        run2_text="beta",
+        image_path=Path("page.png"),
+        uncertain=True,
+        uncertain_note="faded",
+    )
+    final, extra, review = _resolve_pass4_page(item, "gamma")
+    assert final == "gamma"
+    assert not review
+    assert "reconcile" in extra["pass4_outcome"]
+
+
+def test_finalize_reconcile_without_pass4() -> None:
+    wd = Path(tempfile.mkdtemp())
+    state: dict = {"reconcile": {"completed": []}}
+    entry, review = _finalize_reconcile_page(
+        wd,
+        5,
+        "final text",
+        state=state,
+        resolution="batch reconcile from image",
+        uncertain=False,
+        uncertain_note=None,
+    )
+    assert entry["page"] == 5
+    assert not review
+    assert 5 in state["reconcile"]["completed"]
+    assert (wd / "reconcile" / "pages" / "page_0005.txt").read_text(
+        encoding="utf-8"
+    ) == "final text"
+
+
 def test_resolve_pass4_outcome() -> None:
     run1 = "alpha"
     run2 = "beta"
@@ -138,6 +199,59 @@ def test_parse_batch_ids() -> None:
     assert pt.parse_batch_custom_id("rec_p0007") == ("reconcile", 0, 7)
     assert pt.parse_batch_custom_id("spot_p0003") == ("spot", 0, 3)
     assert pt.parse_batch_custom_id("spot_p0003_02") == ("spot", 2, 3)
+    assert pt.parse_batch_custom_id("spotpg_p0042") == ("spotpg", 0, 42)
+    assert pt.parse_batch_custom_id("p4_p0010") == ("pass4", 0, 10)
+
+
+def test_build_page_patch_prompt() -> None:
+    cfg = job_language_config("spanish", "ixtlilxochitl")
+    ops = [
+        PatchOperation(
+            section="body",
+            start=0,
+            end=30,
+            sentence="Nezahualcoyotl reinó en Texcoco.",
+            terms=("Nezahualcoyotl", "Texcoco"),
+            bracketed_sentence="[Nezahualcoyotl] reinó en [Texcoco].",
+            op_index=0,
+        ),
+        PatchOperation(
+            section="body",
+            start=31,
+            end=55,
+            sentence="Moquíhuix en Tenochtitlan.",
+            terms=("Moquíhuix",),
+            bracketed_sentence="[Moquíhuix] en Tenochtitlan.",
+            op_index=1,
+        ),
+    ]
+    prompt = build_page_patch_prompt(ops, cfg, section_hint="spanish_translation")
+    assert "1. [Nezahualcoyotl] reinó en [Texcoco]." in prompt
+    assert "2. [Moquíhuix] en Tenochtitlan." in prompt
+    assert "Nezahualcoyotl, Texcoco" in prompt
+    assert "Moquíhuix" in prompt
+    assert "EXACTLY 2 line" in prompt
+    assert "modern Spanish translation" in prompt
+
+
+def test_parse_page_patch_response() -> None:
+    originals = ["Alpha uno.", "Beta dos."]
+    clean = "1: Alpha UNO.\n2: Beta DOS."
+    out = parse_page_patch_response(clean, 2, originals)
+    assert out == ["Alpha UNO.", "Beta DOS."]
+
+    shuffled = "2) Beta DOS.\n1) Alpha UNO."
+    out2 = parse_page_patch_response(shuffled, 2, originals)
+    assert out2 == ["Alpha UNO.", "Beta DOS."]
+
+    missing = "1: Alpha UNO."
+    out3 = parse_page_patch_response(missing, 2, originals)
+    assert out3[0] == "Alpha UNO."
+    assert out3[1] == originals[1]
+
+    garbage = "I cannot verify these sentences."
+    out4 = parse_page_patch_response(garbage, 2, originals)
+    assert out4 == originals
 
 
 def test_work_page_range() -> None:
@@ -535,6 +649,82 @@ def test_slugify_source_name() -> None:
     assert slugify_source_name("Kaqchikel Chronicles") == "kaqchikel_chronicles"
 
 
+def test_job_lock_acquire_release() -> None:
+    from pdf_transcribe_job_lock import (
+        JobLockError,
+        acquire_job_lock,
+        job_lock_path,
+        release_job_lock,
+    )
+
+    wd = Path(tempfile.mkdtemp())
+    acquire_job_lock(wd)
+    assert job_lock_path(wd).is_file()
+    try:
+        acquire_job_lock(wd)
+        raise AssertionError("expected JobLockError for contended lock")
+    except JobLockError as exc:
+        assert "locked" in str(exc).lower()
+    release_job_lock(wd)
+    assert not job_lock_path(wd).is_file()
+    acquire_job_lock(wd, force=True)
+
+
+def test_work_dir_has_completed_work() -> None:
+    from pdf_transcribe_integrity import work_dir_has_completed_work
+
+    assert not work_dir_has_completed_work({})
+    assert work_dir_has_completed_work({"runs": {"1": {"completed": [3]}}})
+    assert work_dir_has_completed_work({"reconcile": {"completed": [1]}})
+
+
+def test_backup_zip_excludes_images() -> None:
+    import zipfile
+
+    from pdf_transcribe_integrity import backup_work_dir_before_reset
+
+    wd = Path(tempfile.mkdtemp())
+    (wd / "state.json").write_text('{"runs": {"1": {"completed": [1]}}}', encoding="utf-8")
+    (wd / "run1" / "pages").mkdir(parents=True)
+    (wd / "run1" / "pages" / "page_0001.txt").write_text("hello", encoding="utf-8")
+    img_dir = wd / "images"
+    img_dir.mkdir()
+    (img_dir / "page_0001.png").write_bytes(b"\x89PNG")
+
+    zip_path = backup_work_dir_before_reset(wd)
+    assert zip_path is not None
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+    assert "state.json" in names
+    assert any(n.startswith("run1/") for n in names)
+    assert not any(n.startswith("images/") for n in names)
+
+
+def test_term_tuning_report_stats() -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from term_tuning_report import demotion_candidates, parse_spot_patch_term_stats
+
+    log = (
+        "Page 1\n"
+        "  op 0: APPLIED (body) [Tenochtitlan]\n"
+        "  op 1: REJECTED (unchanged) (body) [Tlatelolco]\n"
+        "  op 2: REJECTED (unchanged) (body) [Tlatelolco]\n"
+        "  op 3: REJECTED (impossible_string) (body) [badtypo] — HUMAN REVIEW\n"
+        "Page 2\n"
+        "  op 0: REJECTED (unchanged) (body) [Tlatelolco, Tenochtitlan]\n"
+    )
+    stats = parse_spot_patch_term_stats(log)
+    assert stats["tenochtitlan"].checked == 2
+    assert stats["tenochtitlan"].applied == 1
+    assert stats["tlatelolco"].checked == 3
+    assert stats["tlatelolco"].applied == 0
+    assert stats["tlatelolco"].rejected_unchanged == 3
+    assert stats["badtypo"].rejected_review == 1
+    candidates = demotion_candidates(stats, min_checks=3)
+    assert "tlatelolco" in candidates
+    assert "tenochtitlan" not in candidates
+
+
 def test_detection_sample_spread() -> None:
     """Samples must cover first half pairs and multiple book regions (not pure random)."""
     pages = list(range(1, 201))
@@ -567,10 +757,15 @@ def main() -> int:
         test_content_reconcile_skip,
         test_reconcile_pass4_third_reading,
         test_document_term_index_cache,
+        test_pass4_batch_resolve_missing_result,
+        test_pass4_batch_resolve_matches_reconcile,
+        test_finalize_reconcile_without_pass4,
         test_resolve_pass4_outcome,
         test_hard_terms,
         test_parse_reconcile_uncertain,
         test_parse_batch_ids,
+        test_build_page_patch_prompt,
+        test_parse_page_patch_response,
         test_work_page_range,
         test_chatter_to_skip,
         test_bracket_terms,
@@ -604,6 +799,10 @@ def main() -> int:
         test_kaqchikel_normalization_threshold,
         test_merge_hard_terms,
         test_slugify_source_name,
+        test_job_lock_acquire_release,
+        test_work_dir_has_completed_work,
+        test_backup_zip_excludes_images,
+        test_term_tuning_report_stats,
         test_detection_sample_spread,
     ]
     for fn in tests:

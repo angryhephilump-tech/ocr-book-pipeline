@@ -21,8 +21,9 @@ from pdf_transcribe import (
     _format_api_error,
     anthropic_headers,
     assemble_run_txt,
+    build_page_spot_patch_params,
     build_reconcile_params,
-    build_spot_patch_params,
+    build_vision_message_params,
     call_claude,
     format_page_block,
     is_skip_body,
@@ -36,12 +37,13 @@ from pdf_transcribe import (
     parse_batch_result_line,
     parse_pages,
     parse_reconcile_output,
+    pass4_custom_id,
     read_run_page_body,
     reconcile_custom_id,
     reconcile_page_path,
     save_state,
-    spot_check_custom_id,
     spot_check_page_path,
+    spot_page_custom_id,
     transcription_user_prompt,
     wait_for_batch,
     pages_disagree,
@@ -58,7 +60,11 @@ from pdf_transcribe_source import (
     spot_patch_operations_for_page,
     tag_page_sections_from_run1,
 )
-from pdf_transcribe_spot import PatchOperation, apply_all_patches
+from pdf_transcribe_spot import (
+    PatchOperation,
+    apply_all_patches,
+    parse_page_patch_response,
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +80,17 @@ class SpotPatchRequest:
     page_num: int
     image_path: Path
     operation: PatchOperation
+
+
+@dataclass(frozen=True)
+class Pass4WorkItem:
+    page_num: int
+    reconcile_body: str
+    run1_text: str
+    run2_text: str
+    image_path: Path
+    uncertain: bool
+    uncertain_note: str | None
 
 
 def mark_special_page_complete(state: dict, key: str, page_num: int) -> None:
@@ -424,6 +441,147 @@ def _format_reading_for_log(label: str, text: str) -> list[str]:
     return lines
 
 
+def _finalize_reconcile_page(
+    work_dir: Path,
+    page_num: int,
+    final_body: str,
+    *,
+    state: dict,
+    resolution: str,
+    uncertain: bool,
+    uncertain_note: str | None,
+    pass4_extra: dict | None = None,
+) -> tuple[dict, bool]:
+    """Write reconcile page file; return (log_entry, needs_human_review_from_pass4)."""
+    reconcile_page_path(work_dir, page_num).parent.mkdir(parents=True, exist_ok=True)
+    reconcile_page_path(work_dir, page_num).write_text(final_body, encoding="utf-8")
+    mark_special_page_complete(state, "reconcile", page_num)
+    entry: dict = {
+        "page": page_num,
+        "disagreement": "run1 and run2 differ (content)",
+        "resolution": resolution,
+        "uncertain": uncertain,
+        "uncertain_note": uncertain_note,
+    }
+    pass4_review = False
+    if pass4_extra:
+        entry.update(pass4_extra)
+        entry["resolution"] = f"{resolution} + pass 4 cross-check"
+        outcome = pass4_extra.get("pass4_outcome") or ""
+        pass4_review = "fourth unique" in outcome
+    return entry, pass4_review
+
+
+def _pass4_extra_from_outcome(
+    run1_text: str,
+    run2_text: str,
+    reconcile_body: str,
+    pass4_body: str,
+    final_body: str,
+    outcome: str,
+) -> dict:
+    return {
+        "pass4_fired": True,
+        "run1_reading": run1_text,
+        "run2_reading": run2_text,
+        "reconcile_reading": reconcile_body,
+        "pass4_reading": pass4_body,
+        "pass4_outcome": outcome,
+    }
+
+
+def _resolve_pass4_page(
+    item: Pass4WorkItem,
+    pass4_body: str,
+) -> tuple[str, dict, bool]:
+    final_body, outcome, needs_review = resolve_pass4_outcome(
+        item.run1_text, item.run2_text, item.reconcile_body, pass4_body
+    )
+    extra = _pass4_extra_from_outcome(
+        item.run1_text,
+        item.run2_text,
+        item.reconcile_body,
+        pass4_body,
+        final_body,
+        outcome,
+    )
+    return final_body, extra, needs_review
+
+
+def _build_pass4_params(
+    image_path: Path,
+    model: str,
+    work_dir: Path,
+    state: dict,
+) -> dict:
+    user_prompt = transcription_user_prompt(work_dir, state)
+    return build_vision_message_params(image_path, model, user_text=user_prompt)
+
+
+def _process_pass4_batch(
+    api_key: str,
+    model: str,
+    work_dir: Path,
+    state: dict,
+    pending: list[Pass4WorkItem],
+    *,
+    resolution: str,
+    report: Callable | None,
+    total_pages: int,
+) -> list[tuple[dict, bool]]:
+    """Run batched pass-4 transcriptions; return (log_entry, pass4_review) per page."""
+    if not pending:
+        return []
+    payload = [
+        {
+            "custom_id": pass4_custom_id(item.page_num),
+            "params": _build_pass4_params(item.image_path, model, work_dir, state),
+        }
+        for item in pending
+    ]
+    results_by_page: dict[int, str] = {}
+    for line in _run_batch_custom(
+        api_key,
+        model,
+        payload,
+        report=report,
+        phase="reconcile",
+        total_pages=total_pages,
+        label="Pass 4",
+    ):
+        cid, text, _ = parse_batch_result_line(line)
+        if not cid or text is None:
+            continue
+        try:
+            kind, _, page_num = parse_batch_custom_id(cid)
+        except ValueError:
+            continue
+        if kind != "pass4":
+            continue
+        results_by_page[page_num] = text
+
+    outcomes: list[tuple[dict, bool]] = []
+    for item in pending:
+        raw = results_by_page.get(item.page_num)
+        if raw is None:
+            pass4_body = "[Pass 4 failed: missing batch result]"
+        else:
+            pass4_body = normalize_transcription_output(raw)
+        final_body, pass4_extra, pass4_review = _resolve_pass4_page(item, pass4_body)
+        entry, review = _finalize_reconcile_page(
+            work_dir,
+            item.page_num,
+            final_body,
+            state=state,
+            resolution=resolution,
+            uncertain=item.uncertain,
+            uncertain_note=item.uncertain_note,
+            pass4_extra=pass4_extra,
+        )
+        outcomes.append((entry, review or pass4_review))
+    return outcomes
+
+
 def _process_reconcile_result(
     work_dir: Path,
     page_num: int,
@@ -450,20 +608,16 @@ def _process_reconcile_result(
         work_dir=work_dir,
         state=state,
     )
-    reconcile_page_path(work_dir, page_num).parent.mkdir(parents=True, exist_ok=True)
-    reconcile_page_path(work_dir, page_num).write_text(final_body, encoding="utf-8")
-    mark_special_page_complete(state, "reconcile", page_num)
-    entry: dict = {
-        "page": page_num,
-        "disagreement": "run1 and run2 differ (content)",
-        "resolution": resolution,
-        "uncertain": uncertain,
-        "uncertain_note": uncertain_note,
-    }
-    if pass4_extra:
-        entry.update(pass4_extra)
-        entry["resolution"] = f"{resolution} + pass 4 cross-check"
-    return entry, pass4_review
+    return _finalize_reconcile_page(
+        work_dir,
+        page_num,
+        final_body,
+        state=state,
+        resolution=resolution,
+        uncertain=uncertain,
+        uncertain_note=uncertain_note,
+        pass4_extra=pass4_extra,
+    )
 
 
 def write_reconcile_log(work_dir: Path, entries: list[dict]) -> Path:
@@ -723,6 +877,7 @@ def finalize_pipeline(
 
     if reconcile_items:
         reconcile_by_page = {item.page_num: item for item in reconcile_items}
+        pass4_pending: list[Pass4WorkItem] = []
         if use_batch:
             payload = [
                 {
@@ -755,15 +910,23 @@ def finalize_pipeline(
                 if not item:
                     continue
                 body, uncertain, note = parse_reconcile_output(text)
-                entry, pass4_review = _process_reconcile_result(
+                if reconcile_needs_pass4(body, item.run1_text, item.run2_text):
+                    pass4_pending.append(
+                        Pass4WorkItem(
+                            page_num=page_num,
+                            reconcile_body=body,
+                            run1_text=item.run1_text,
+                            run2_text=item.run2_text,
+                            image_path=item.image_path,
+                            uncertain=uncertain,
+                            uncertain_note=note,
+                        )
+                    )
+                    continue
+                entry, pass4_review = _finalize_reconcile_page(
                     work_dir,
                     page_num,
                     body,
-                    item.run1_text,
-                    item.run2_text,
-                    item.image_path,
-                    api_key=api_key,
-                    model=model,
                     state=state,
                     resolution="batch reconcile from image",
                     uncertain=uncertain,
@@ -776,6 +939,25 @@ def finalize_pipeline(
                 if pass4_review:
                     stats["human_review_pages"].append(page_num)
                 stats["pages_reconciled"] += 1
+            if pass4_pending:
+                for entry, pass4_review in _process_pass4_batch(
+                    api_key,
+                    model,
+                    work_dir,
+                    state,
+                    pass4_pending,
+                    resolution="batch reconcile from image",
+                    report=report,
+                    total_pages=total_pages,
+                ):
+                    log_entries.append(entry)
+                    page_num = entry["page"]
+                    if entry.get("uncertain"):
+                        stats["pages_uncertain"] += 1
+                        stats["human_review_pages"].append(page_num)
+                    if pass4_review:
+                        stats["human_review_pages"].append(page_num)
+                    stats["pages_reconciled"] += 1
         else:
             for idx, item in enumerate(reconcile_items, start=1):
                 if report:
@@ -839,10 +1021,11 @@ def finalize_pipeline(
             report=report,
             total_pages=total_pages,
         )
-        pages_with_spot = sorted({r.page_num for r in patch_requests})
-        spot_chunks = max(
-            1, (len(patch_requests) + BATCH_MAX_REQUESTS - 1) // BATCH_MAX_REQUESTS
-        )
+        by_page: dict[int, list[SpotPatchRequest]] = {}
+        for req in patch_requests:
+            by_page.setdefault(req.page_num, []).append(req)
+        pages_with_spot = sorted(by_page.keys())
+        spot_chunks = max(1, len(pages_with_spot))
         if patch_requests and report:
             report(
                 "spot_check",
@@ -854,27 +1037,54 @@ def finalize_pipeline(
                 step_done=0,
                 step_total=spot_chunks,
                 batch_done=0,
-                batch_total=len(patch_requests),
+                batch_total=len(pages_with_spot),
             )
         if patch_requests:
+
+            def _ops_for_page(page_num: int) -> list[PatchOperation]:
+                reqs = sorted(by_page[page_num], key=lambda r: r.operation.op_index)
+                return [r.operation for r in reqs]
+
+            def _apply_page_spot_results(page_num: int, raw_text: str) -> None:
+                base = base_page_body(work_dir, page_num)
+                ops = _ops_for_page(page_num)
+                originals = [op.sentence for op in ops]
+                responses = parse_page_patch_response(raw_text, len(ops), originals)
+                responses = [normalize_transcription_output(r) for r in responses]
+                hint = page_section_hint(state, page_num)
+                applied, rejected, needs_review = _save_spot_patched_page(
+                    work_dir,
+                    page_num,
+                    base,
+                    ops,
+                    responses,
+                    lang_cfg,
+                    impossible,
+                    section_hint=hint,
+                )
+                mark_special_page_complete(state, "spot_check", page_num)
+                stats["pages_spot_checked"] += 1
+                stats["spot_patches_applied"] += applied
+                stats["spot_patches_rejected"] += rejected
+                if needs_review:
+                    stats["spot_missing_term_reviews"] += 1
+                    stats["human_review_pages"].append(page_num)
+
             if use_batch:
                 payload = [
                     {
-                        "custom_id": spot_check_custom_id(
-                            req.page_num, req.operation.op_index
-                        ),
-                        "params": build_spot_patch_params(
-                            req.image_path,
+                        "custom_id": spot_page_custom_id(page_num),
+                        "params": build_page_spot_patch_params(
+                            by_page[page_num][0].image_path,
                             model,
-                            req.operation.sentence,
-                            list(req.operation.terms),
+                            _ops_for_page(page_num),
                             lang_cfg,
-                            section_hint=page_section_hint(state, req.page_num),
+                            section_hint=page_section_hint(state, page_num),
                         ),
                     }
-                    for req in patch_requests
+                    for page_num in pages_with_spot
                 ]
-                results_by_page: dict[int, list[tuple[int, str]]] = {}
+                results_by_page: dict[int, str] = {}
                 for line in _run_batch_custom(
                     api_key,
                     model,
@@ -888,45 +1098,15 @@ def finalize_pipeline(
                     if not cid or text is None:
                         continue
                     try:
-                        kind, op_idx, page_num = parse_batch_custom_id(cid)
+                        kind, _, page_num = parse_batch_custom_id(cid)
                     except ValueError:
                         continue
-                    if kind != "spot":
+                    if kind not in ("spotpg", "spot"):
                         continue
-                    results_by_page.setdefault(page_num, []).append(
-                        (op_idx, normalize_transcription_output(text))
-                    )
+                    results_by_page[page_num] = text
                 for page_num in pages_with_spot:
-                    base = base_page_body(work_dir, page_num)
-                    ops = spot_patch_operations_for_page(
-                        base, lang_cfg, state, document_text=document_text
-                    )
-                    page_results = sorted(results_by_page.get(page_num, []))
-                    responses = [t for _, t in page_results]
-                    if len(responses) < len(ops):
-                        responses.extend([""] * (len(ops) - len(responses)))
-                    hint = page_section_hint(state, page_num)
-                    applied, rejected, needs_review = _save_spot_patched_page(
-                        work_dir,
-                        page_num,
-                        base,
-                        ops,
-                        responses,
-                        lang_cfg,
-                        impossible,
-                        section_hint=hint,
-                    )
-                    mark_special_page_complete(state, "spot_check", page_num)
-                    stats["pages_spot_checked"] += 1
-                    stats["spot_patches_applied"] += applied
-                    stats["spot_patches_rejected"] += rejected
-                    if needs_review:
-                        stats["spot_missing_term_reviews"] += 1
-                        stats["human_review_pages"].append(page_num)
+                    _apply_page_spot_results(page_num, results_by_page.get(page_num, ""))
             else:
-                by_page: dict[int, list[SpotPatchRequest]] = {}
-                for req in patch_requests:
-                    by_page.setdefault(req.page_num, []).append(req)
                 for idx, page_num in enumerate(pages_with_spot, start=1):
                     if report:
                         report(
@@ -937,45 +1117,22 @@ def finalize_pipeline(
                             None,
                             f"Spot-check page {page_num} ({idx}/{len(pages_with_spot)})…",
                         )
-                    base = base_page_body(work_dir, page_num)
                     reqs = sorted(by_page[page_num], key=lambda r: r.operation.op_index)
-                    responses: list[str] = []
-                    for req in reqs:
-                        try:
-                            raw = _post_message(
-                                api_key,
-                                build_spot_patch_params(
-                                    req.image_path,
-                                    model,
-                                    req.operation.sentence,
-                                    list(req.operation.terms),
-                                    lang_cfg,
-                                    section_hint=page_section_hint(state, page_num),
-                                ),
-                            )
-                            responses.append(normalize_transcription_output(raw))
-                        except RuntimeError:
-                            responses.append(req.operation.sentence)
-                        time.sleep(API_DELAY_SEC)
-                    ops = [r.operation for r in reqs]
-                    hint = page_section_hint(state, page_num)
-                    applied, rejected, needs_review = _save_spot_patched_page(
-                        work_dir,
-                        page_num,
-                        base,
-                        ops,
-                        responses,
-                        lang_cfg,
-                        impossible,
-                        section_hint=hint,
-                    )
-                    mark_special_page_complete(state, "spot_check", page_num)
-                    stats["pages_spot_checked"] += 1
-                    stats["spot_patches_applied"] += applied
-                    stats["spot_patches_rejected"] += rejected
-                    if needs_review:
-                        stats["spot_missing_term_reviews"] += 1
-                        stats["human_review_pages"].append(page_num)
+                    try:
+                        raw = _post_message(
+                            api_key,
+                            build_page_spot_patch_params(
+                                reqs[0].image_path,
+                                model,
+                                _ops_for_page(page_num),
+                                lang_cfg,
+                                section_hint=page_section_hint(state, page_num),
+                            ),
+                        )
+                    except RuntimeError:
+                        raw = ""
+                    _apply_page_spot_results(page_num, raw)
+                    time.sleep(API_DELAY_SEC)
             save_state(work_dir, state)
 
         # Pages with hard terms but no extractable sentences — mark done; flag for review.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import zipfile
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -348,6 +349,72 @@ def save_state(work_dir: Path, state: dict) -> None:
     from pdf_transcribe import save_state as _save
 
     _save(work_dir, state)
+
+
+def work_dir_has_completed_work(state: dict) -> bool:
+    """True if state.json records any completed transcription/reconcile/spot pages."""
+    runs = state.get("runs") or {}
+    for run in runs.values():
+        if isinstance(run, dict) and run.get("completed"):
+            return True
+    for key in ("reconcile", "spot_check"):
+        block = state.get(key) or {}
+        if isinstance(block, dict) and block.get("completed"):
+            return True
+    return False
+
+
+def summarize_completed_work(state: dict) -> dict:
+    runs = state.get("runs") or {}
+    run_done = {
+        k: len(v.get("completed") or [])
+        for k, v in runs.items()
+        if isinstance(v, dict)
+    }
+    return {
+        "runs": run_done,
+        "reconcile_pages": len((state.get("reconcile") or {}).get("completed") or []),
+        "spot_check_pages": len((state.get("spot_check") or {}).get("completed") or []),
+    }
+
+
+_BACKUP_PATHS = (
+    "state.json",
+    "batch_state.json",
+    "progress.json",
+    "run1.txt",
+    "run2.txt",
+    "transcribed.txt",
+    "differences.txt",
+    "reconcile_log.txt",
+    "spot_patch_log.txt",
+    "run_summary.txt",
+    "run_summary.json",
+    "pilot_report.json",
+)
+
+
+def backup_work_dir_before_reset(work_dir: Path) -> Path | None:
+    """Zip outputs (excluding images/) before start-over. Returns zip path or None."""
+    work_dir = work_dir.resolve()
+    to_add: list[Path] = []
+    for rel in _BACKUP_PATHS:
+        p = work_dir / rel
+        if p.is_file():
+            to_add.append(p)
+    for sub in ("run1", "run2", "reconcile", "spot_check"):
+        p = work_dir / sub
+        if p.is_dir():
+            to_add.extend(f for f in p.rglob("*") if f.is_file())
+    if not to_add:
+        return None
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    zip_path = work_dir / f"_backup_{ts}.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in to_add:
+            arcname = path.relative_to(work_dir).as_posix()
+            zf.write(path, arcname)
+    return zip_path
 
 
 def reset_source_work_dir(work_dir: Path, source_name: str, *, keep_config: bool = True) -> list[str]:

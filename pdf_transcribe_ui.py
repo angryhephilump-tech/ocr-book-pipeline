@@ -170,8 +170,11 @@ def create_app() -> Flask:
         upload.save(pdf_path)
         from pdf_transcribe_integrity import (
             run_startup_integrity,
+            summarize_completed_work,
             work_dir_contains_source_name,
+            work_dir_has_completed_work,
         )
+        from pdf_transcribe_job_lock import JobLockError, acquire_job_lock, release_job_lock
 
         work_dir = pdf_transcribe.work_dir_for_pdf(
             pdf_path,
@@ -182,7 +185,14 @@ def create_app() -> Flask:
         integrity, _healed = run_startup_integrity(work_dir, params["source_name"])
         if integrity.blocking:
             return jsonify({"ok": False, "error": integrity.blocking[0]}), 409
+        existing_state = pdf_transcribe.load_state(work_dir)
+        has_existing_work = work_dir_has_completed_work(existing_state)
+        existing_summary = (
+            summarize_completed_work(existing_state) if has_existing_work else {}
+        )
         job["work_dir"] = str(work_dir)
+        job["has_existing_work"] = has_existing_work
+        job["existing_work_summary"] = existing_summary
         job["integrity"] = integrity.to_dict()
         folder_warn = None
         if not work_dir_contains_source_name(work_dir, params["source_name"]):
@@ -256,7 +266,18 @@ def create_app() -> Flask:
                     else f"Loaded saved profile for {params['source_name']}",
                 )
                 if not job["needs_confirmation"]:
-                    _start_transcription_job(api_key, work_dir, params, pdf_path)
+                    if has_existing_work:
+                        job["needs_resume_choice"] = True
+                        pdf_transcribe.write_progress(
+                            work_dir,
+                            phase="awaiting_confirm",
+                            current_run=0,
+                            page=0,
+                            total_pages=page_range.job_page_count,
+                            message="Existing work found — resume or start over?",
+                        )
+                    else:
+                        _start_transcription_job(api_key, work_dir, params, pdf_path)
             except Exception as exc:
                 job["error"] = str(exc)
                 pdf_transcribe.write_progress(
@@ -268,7 +289,9 @@ def create_app() -> Flask:
                     message=str(exc),
                 )
             finally:
-                if job.get("error") or job.get("needs_confirmation"):
+                if job.get("error") or job.get("needs_confirmation") or job.get(
+                    "needs_resume_choice"
+                ):
                     job["running"] = False
 
         def _start_transcription_job(
@@ -278,6 +301,7 @@ def create_app() -> Flask:
                 job["running"] = True
                 job["error"] = None
                 try:
+                    acquire_job_lock(wd)
                     pdf_transcribe.run_transcription(
                         pdf,
                         key,
@@ -292,6 +316,16 @@ def create_app() -> Flask:
                         explicit_pages=p["explicit_pages"],
                         skip_detection=True,
                     )
+                except JobLockError as exc:
+                    job["error"] = str(exc)
+                    pdf_transcribe.write_progress(
+                        wd,
+                        phase="error",
+                        current_run=0,
+                        page=0,
+                        total_pages=0,
+                        message=str(exc),
+                    )
                 except Exception as exc:
                     job["error"] = str(exc)
                     pdf_transcribe.write_progress(
@@ -303,6 +337,7 @@ def create_app() -> Flask:
                         message=str(exc),
                     )
                 finally:
+                    release_job_lock(wd)
                     job["running"] = False
 
             threading.Thread(target=worker, daemon=True).start()
@@ -323,6 +358,8 @@ def create_app() -> Flask:
                 "processing_mode": resolved,
                 "integrity": integrity.to_dict(),
                 "folder_warning": folder_warn,
+                "has_existing_work": has_existing_work,
+                "existing_work_summary": existing_summary,
             }
         )
 
@@ -347,10 +384,22 @@ def create_app() -> Flask:
         profile = state.get("detected_source_profile") or job.get("profile") or {}
         from pdf_transcribe_detect import profile_display_lines
 
+        from pdf_transcribe_integrity import (
+            summarize_completed_work,
+            work_dir_has_completed_work,
+        )
+
+        existing_state = pdf_transcribe.load_state(Path(work_dir))
+        has_existing = work_dir_has_completed_work(existing_state)
         return jsonify(
             {
                 "ready": True,
                 "needs_confirmation": not profile.get("confirmed"),
+                "needs_resume_choice": bool(job.get("needs_resume_choice")),
+                "has_existing_work": has_existing,
+                "existing_work_summary": summarize_completed_work(existing_state)
+                if has_existing
+                else {},
                 "from_saved": bool(profile.get("from_saved_config")),
                 "lines": profile_display_lines(profile),
                 "profile": profile,
@@ -388,7 +437,28 @@ def create_app() -> Flask:
         profile = state.get("detected_source_profile") or job.get("profile") or {}
         source_name = prepare.get("source_name") or state.get("source_name") or "unknown"
 
-        if action in ("yes", "confirm"):
+        from pdf_transcribe_integrity import (
+            backup_work_dir_before_reset,
+            reset_source_work_dir,
+            work_dir_has_completed_work,
+        )
+
+        if action == "start_over":
+            if work_dir_has_completed_work(state):
+                backup_path = backup_work_dir_before_reset(Path(work_dir))
+                reset_source_work_dir(Path(work_dir), source_name)
+                state = pdf_transcribe.load_state(Path(work_dir))
+                if backup_path:
+                    job["last_backup"] = str(backup_path)
+            pdf_transcribe.confirm_source_profile(
+                Path(work_dir),
+                state,
+                source_name,
+                profile,
+                language=(data.get("language") or prepare.get("language") or None),
+                script=(data.get("script") or prepare.get("script") or None),
+            )
+        elif action in ("yes", "confirm", "resume"):
             pdf_transcribe.confirm_source_profile(
                 Path(work_dir),
                 state,
@@ -417,16 +487,19 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": f"Unknown action: {action}"}), 400
 
         job["needs_confirmation"] = False
+        job["needs_resume_choice"] = False
 
         def worker() -> None:
             job["running"] = True
             job["error"] = None
+            wd = Path(work_dir)
             try:
+                acquire_job_lock(wd)
                 pdf_transcribe.run_transcription(
                     pdf_path,
                     api_key,
                     max_pages=prepare.get("max_pages"),
-                    work_dir=Path(work_dir),
+                    work_dir=wd,
                     skip_front_pages=prepare.get("skip_front_pages", 2),
                     processing_mode=prepare.get("processing_mode"),
                     language=prepare.get("language"),
@@ -436,10 +509,20 @@ def create_app() -> Flask:
                     explicit_pages=prepare.get("explicit_pages"),
                     skip_detection=True,
                 )
+            except JobLockError as exc:
+                job["error"] = str(exc)
+                pdf_transcribe.write_progress(
+                    wd,
+                    phase="error",
+                    current_run=0,
+                    page=0,
+                    total_pages=0,
+                    message=str(exc),
+                )
             except Exception as exc:
                 job["error"] = str(exc)
                 pdf_transcribe.write_progress(
-                    Path(work_dir),
+                    wd,
                     phase="error",
                     current_run=0,
                     page=0,
@@ -447,10 +530,16 @@ def create_app() -> Flask:
                     message=str(exc),
                 )
             finally:
+                release_job_lock(wd)
                 job["running"] = False
 
         threading.Thread(target=worker, daemon=True).start()
-        return jsonify({"ok": True, "work_dir": work_dir, "message": "Transcription started."})
+        msg = "Transcription started."
+        if action == "start_over" and job.get("last_backup"):
+            msg = f"Start over — backup saved to {job['last_backup']}"
+        elif action in ("resume", "yes", "confirm"):
+            msg = "Resuming transcription."
+        return jsonify({"ok": True, "work_dir": work_dir, "message": msg})
 
     @app.route("/api/pilot-status")
     def api_pilot_status():
@@ -492,7 +581,9 @@ def create_app() -> Flask:
             data["running"] = job["running"]
             data["error"] = job.get("error")
             data["work_dir"] = work_dir
-            data["awaiting_confirm"] = bool(job.get("needs_confirmation"))
+            data["awaiting_confirm"] = bool(
+                job.get("needs_confirmation") or job.get("needs_resume_choice")
+            )
             pilot_path = Path(work_dir) / "pilot_report.json"
             if pilot_path.is_file():
                 data["pilot_report"] = json.loads(pilot_path.read_text(encoding="utf-8"))
