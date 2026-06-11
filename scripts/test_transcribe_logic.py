@@ -813,6 +813,39 @@ def test_classify_archaic_spanish_not_paleographic() -> None:
     assert classify_page_section(archaic) == "spanish_translation"
 
 
+def test_write_progress_retries_windows_file_lock() -> None:
+    import os
+
+    wd = Path(tempfile.mkdtemp()) / "work"
+    calls = {"n": 0}
+    real_replace = os.replace
+
+    def flaky_replace(src, dst) -> None:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise OSError(5, "Access is denied")
+        real_replace(src, dst)
+
+    old_replace = os.replace
+    os.replace = flaky_replace
+    try:
+        pt.write_progress(
+            wd,
+            phase="transcribe",
+            current_run=1,
+            page=3,
+            total_pages=10,
+            message="page 3",
+        )
+        prog = pt.load_progress(wd)
+        assert prog is not None
+        assert prog["phase"] == "transcribe"
+        assert prog["page"] == 3
+        assert calls["n"] == 3
+    finally:
+        os.replace = old_replace
+
+
 def test_integrity_heal_stale_state() -> None:
     from pdf_transcribe_integrity import heal_stale_state
 
@@ -1088,6 +1121,7 @@ def main() -> int:
         test_classify_page_section,
         test_classify_anales_pilot_page_pattern,
         test_classify_archaic_spanish_not_paleographic,
+        test_write_progress_retries_windows_file_lock,
         test_resolve_source_slug_hint,
         test_spot_patch_rejection_check,
         test_spot_patch_rejection_check_current_run_pages_only,

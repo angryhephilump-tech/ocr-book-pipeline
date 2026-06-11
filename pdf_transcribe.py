@@ -466,6 +466,35 @@ def save_state(work_dir: Path, state: dict) -> None:
     state_path(work_dir).write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
+def _atomic_write_json(path: Path, payload: dict, *, attempts: int = 10) -> None:
+    """Write JSON via temp file + replace; retry on Windows lock races with UI polling."""
+    text = json.dumps(payload, indent=2)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    last_err: OSError | None = None
+    for attempt in range(attempts):
+        tmp.write_text(text, encoding="utf-8")
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError as exc:
+            last_err = exc
+            winerr = getattr(exc, "winerror", None)
+            retryable = winerr in (5, 32) or exc.errno in (5, 13, 16)
+            if not retryable:
+                raise
+            if attempt + 1 < attempts:
+                time.sleep(0.05 * (attempt + 1))
+    # Fallback: direct write (load_progress already tolerates empty/invalid JSON).
+    try:
+        path.write_text(text, encoding="utf-8")
+        tmp.unlink(missing_ok=True)
+    except OSError:
+        if last_err is not None:
+            raise last_err
+        raise
+
+
 def write_progress(
     work_dir: Path,
     *,
@@ -495,11 +524,7 @@ def write_progress(
         "step_total": step_total,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    work_dir.mkdir(parents=True, exist_ok=True)
-    path = progress_path(work_dir)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    _atomic_write_json(progress_path(work_dir), payload)
 
 
 def resolve_processing_mode(mode: str | None, *, max_pages: int | None) -> str:
